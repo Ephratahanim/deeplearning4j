@@ -19,22 +19,27 @@
 package org.deeplearning4j.models.paragraphvectors;
 
 
+import lombok.NonNull;
+import org.deeplearning4j.models.embeddings.loader.WordVectorSerializer;
+import org.deeplearning4j.models.word2vec.VocabWord;
 import org.deeplearning4j.models.word2vec.Word2Vec;
 import org.deeplearning4j.models.word2vec.wordstore.VocabCache;
 import org.deeplearning4j.models.word2vec.wordstore.inmemory.InMemoryLookupCache;
+import org.deeplearning4j.text.documentiterator.FileLabelAwareIterator;
+import org.deeplearning4j.text.documentiterator.LabelAwareIterator;
 import org.deeplearning4j.text.documentiterator.LabelsSource;
-import org.deeplearning4j.text.sentenceiterator.BasicLineIterator;
-import org.deeplearning4j.text.sentenceiterator.LineSentenceIterator;
-import org.deeplearning4j.text.sentenceiterator.SentenceIterator;
-import org.deeplearning4j.text.sentenceiterator.UimaSentenceIterator;
+import org.deeplearning4j.text.sentenceiterator.*;
 import org.deeplearning4j.text.sentenceiterator.labelaware.LabelAwareSentenceIterator;
 import org.deeplearning4j.text.sentenceiterator.labelaware.LabelAwareUimaSentenceIterator;
 import org.deeplearning4j.text.tokenization.tokenizer.preprocessor.CommonPreprocessor;
 import org.deeplearning4j.text.tokenization.tokenizerfactory.DefaultTokenizerFactory;
 import org.deeplearning4j.text.tokenization.tokenizerfactory.TokenizerFactory;
 import org.deeplearning4j.text.tokenization.tokenizerfactory.UimaTokenizerFactory;
+import org.deeplearning4j.util.SerializationUtils;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
+import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.ops.transforms.Transforms;
@@ -63,7 +68,7 @@ public class ParagraphVectorsTest {
     }
 
 
-
+/*
     @Test
     public void testWord2VecRunThroughVectors() throws Exception {
         ClassPathResource resource = new ClassPathResource("/big/raw_sentences.txt");
@@ -89,6 +94,7 @@ public class ParagraphVectorsTest {
         new File("cache.ser").delete();
 
     }
+*/
 
     /**
      * This test checks, how vocab is built using SentenceIterator provided, without labels.
@@ -162,7 +168,7 @@ public class ParagraphVectorsTest {
                 .epochs(1)
                 .layerSize(100)
                 .learningRate(0.025)
-                .labelsGenerator(source)
+                .labelsSource(source)
                 .windowSize(5)
                 .iterate(iter)
                 .trainWordVectors(false)
@@ -181,6 +187,11 @@ public class ParagraphVectorsTest {
         assertNotEquals(1, cnt2);
         assertNotEquals(cnt1, cnt2);
 
+        assertEquals(97406, cache.numWords());
+
+        assertTrue(vec.hasWord("DOC_16392"));
+        assertTrue(vec.hasWord("DOC_3720"));
+
         /*
             We have few lines that contain pretty close words invloved.
             These sentences should be pretty close to each other in vector space
@@ -191,10 +202,16 @@ public class ParagraphVectorsTest {
         // line 12493: This is my world .
         // line 16393: This is my work .
 
+        // this is special sentence, that has nothing common with previous sentences
         // line 9853: We now have one .
 
         double similarityD = vec.similarity("day", "night");
         log.info("day/night similarity: " + similarityD);
+
+        if (similarityD < 0.0) {
+            log.info("Day: " + Arrays.toString(vec.getWordVectorMatrix("day").dup().data().asDouble()));
+            log.info("Night: " + Arrays.toString(vec.getWordVectorMatrix("night").dup().data().asDouble()));
+        }
 
         double similarityW = vec.similarity("way", "work");
         log.info("way/work similarity: " + similarityW);
@@ -221,6 +238,39 @@ public class ParagraphVectorsTest {
         double similarityX = vec.similarity("DOC_3720", "DOC_9852");
         log.info("3720/9852 similarity: " + similarityX);
         assertTrue(similarityX < 0.5d);
+
+        File tempFile = File.createTempFile("paravec", "ser");
+        tempFile.deleteOnExit();
+
+        INDArray day = vec.getWordVectorMatrix("day").dup();
+
+        /*
+            Testing binary serialization
+         */
+        SerializationUtils.saveObject(vec, tempFile);
+
+
+        ParagraphVectors vec2 = (ParagraphVectors) SerializationUtils.readObject(tempFile);
+        INDArray day2 = vec2.getWordVectorMatrix("day").dup();
+
+        assertEquals(day, day2);
+
+        tempFile.delete();
+
+
+        /*
+            Testing txt serialization
+         */
+        File tempFile2 = File.createTempFile("paravec", "ser");
+        tempFile2.deleteOnExit();
+
+        WordVectorSerializer.writeWordVectors(vec, tempFile2);
+
+        ParagraphVectors vec3 = WordVectorSerializer.readParagraphVectorsFromText(tempFile2);
+        INDArray day3 = vec3.getWordVectorMatrix("day").dup();
+
+
+        assertEquals(day, day3);
     }
 
     @Test
@@ -242,7 +292,7 @@ public class ParagraphVectorsTest {
                 .epochs(1)
                 .layerSize(100)
                 .learningRate(0.025)
-                .labelsGenerator(source)
+                .labelsSource(source)
                 .windowSize(5)
                 .iterate(iter)
                 .trainWordVectors(true)
@@ -271,7 +321,10 @@ public class ParagraphVectorsTest {
         // line 12493: This is my world .
         // line 16393: This is my work .
 
+        // this is special sentence, that has nothing common with previous sentences
         // line 9853: We now have one .
+
+        assertTrue(vec.hasWord("DOC_3720"));
 
         double similarityD = vec.similarity("day", "night");
         log.info("day/night similarity: " + similarityD);
@@ -304,68 +357,160 @@ public class ParagraphVectorsTest {
         assertTrue(similarityX < 0.5d);
     }
 
+
+    /**
+     * This test is not indicative.
+     * there's no need in this test within travis, use it manually only for problems detection
+     *
+     * @throws Exception
+     */
+    @Test
+    @Ignore
+    public void testParagraphVectorsReducedLabels1() throws Exception {
+        ClassPathResource resource = new ClassPathResource("/labeled");
+        File file = resource.getFile();
+
+        LabelAwareIterator iter = new FileLabelAwareIterator.Builder()
+                .addSourceFolder(file)
+                .build();
+
+        TokenizerFactory t = new DefaultTokenizerFactory();
+
+        /**
+         * Please note: text corpus is REALLY small, and some kind of "results" could be received with HIGH epochs number, like 30.
+         * But there's no reason to keep at that high
+         */
+
+        ParagraphVectors vec = new ParagraphVectors.Builder()
+                .minWordFrequency(1)
+                .epochs(3)
+                .layerSize(100)
+                .stopWords(new ArrayList<String>())
+                .windowSize(5)
+                .iterate(iter)
+                .tokenizerFactory(t)
+                .build();
+
+        vec.fit();
+
+        //WordVectorSerializer.writeWordVectors(vec, "vectors.txt");
+
+        INDArray w1 = vec.lookupTable().vector("I");
+        INDArray w2 = vec.lookupTable().vector("am");
+        INDArray w3 = vec.lookupTable().vector("sad.");
+
+        INDArray words = Nd4j.create(3, vec.lookupTable().layerSize());
+
+        words.putRow(0, w1);
+        words.putRow(1, w2);
+        words.putRow(2, w3);
+
+
+        INDArray mean = words.isMatrix() ? words.mean(0) : words;
+
+        log.info("Mean" + Arrays.toString(mean.dup().data().asDouble()));
+        log.info("Array" + Arrays.toString(vec.lookupTable().vector("negative").dup().data().asDouble()));
+
+        double simN = Transforms.cosineSim(mean, vec.lookupTable().vector("negative"));
+        log.info("Similarity negative: " + simN);
+
+
+        double simP = Transforms.cosineSim(mean, vec.lookupTable().vector("neutral"));
+        log.info("Similarity neutral: " + simP);
+
+        double simV = Transforms.cosineSim(mean, vec.lookupTable().vector("positive"));
+        log.info("Similarity positive: " + simV);
+    }
+
+
     /*
         In this test we'll build w2v model, and will use it's vocab and weights for ParagraphVectors.
-        IS NOT READY YET
+        there's no need in this test within travis, use it manually only for problems detection
     */
     @Test
+    @Ignore
     public void testParagraphVectorsOverExistingWordVectorsModel() throws Exception {
-        /*
-        ClassPathResource resource = new ClassPathResource("/big/raw_sentences.txt");
-        File file = resource.getFile();
-        SentenceIterator iter = new BasicLineIterator(file);
 
-        InMemoryLookupCache cache = new InMemoryLookupCache(false);
+
+        // we build w2v from multiple sources, to cover everything
+        ClassPathResource resource_sentences = new ClassPathResource("/big/raw_sentences.txt");
+        ClassPathResource resource_mixed = new ClassPathResource("/paravec");
+        SentenceIterator iter = new AggregatingSentenceIterator.Builder()
+                .addSentenceIterator(new BasicLineIterator(resource_sentences.getFile()))
+                .addSentenceIterator(new FileSentenceIterator(resource_mixed.getFile()))
+                .build();
 
         TokenizerFactory t = new DefaultTokenizerFactory();
         t.setTokenPreProcessor(new CommonPreprocessor());
 
         Word2Vec wordVectors = new Word2Vec.Builder()
                 .minWordFrequency(1)
+                .batchSize(250)
                 .iterations(1)
-                .epochs(1)
+                .epochs(2)
+                .learningRate(0.025)
+                .minLearningRate(0.001)
                 .iterate(iter)
                 .tokenizerFactory(t)
                 .build();
 
         wordVectors.fit();
 
-        INDArray vector_day1 = wordVectors.getWordVectorMatrix("day");
+        INDArray vector_day1 = wordVectors.getWordVectorMatrix("day").dup();
         double similarityD = wordVectors.similarity("day", "night");
         log.info("day/night similarity: " + similarityD);
-        assertTrue(similarityD > 0.65d);
+        assertTrue(similarityD > 0.5d);
 
         // At this moment we have ready w2v model. It's time to use it for ParagraphVectors
 
+        FileLabelAwareIterator labelAwareIterator = new FileLabelAwareIterator.Builder()
+                .addSourceFolder(new ClassPathResource("/paravec/labeled").getFile())
+                .build();
+
+
+        // documents from this iterator will be used for classification
+        FileLabelAwareIterator unlabeledIterator = new FileLabelAwareIterator.Builder()
+                .addSourceFolder(new ClassPathResource("/paravec/unlabeled").getFile())
+                .build();
+
+
+        // we're building classifier now, with pre-built w2v model passed in
         ParagraphVectors paragraphVectors = new ParagraphVectors.Builder()
-                .iterate(iter)
+                .iterate(labelAwareIterator)
                 .iterations(1)
-                .epochs(1)
+                .epochs(10)
                 .tokenizerFactory(t)
                 .trainWordVectors(false)
-                .wordVectorsModel(wordVectors)
-                .labelsTemplate("SNT_%d")
+                .useExistingWordVectors(wordVectors)
                 .build();
 
         paragraphVectors.fit();
-        INDArray vector_day2 = paragraphVectors.getWordVectorMatrix("day");
+
+        INDArray vector_day2 = paragraphVectors.getWordVectorMatrix("day").dup();
         double crossDay = arraysSimilarity(vector_day1, vector_day2);
 
         log.info("Day1: " + vector_day1);
         log.info("Day2: " + vector_day2);
         log.info("Cross-Day similarity: " + crossDay);
+        log.info("Cross-Day similiarity 2: " + Transforms.cosineSim(vector_day1, vector_day2));
 
         assertTrue(crossDay > 0.9d);
-        */
+
     }
 
-    private double arraysSimilarity(INDArray array1, INDArray array2) {
+    /*
+        Left as reference implementation, before stuff was changed in w2v
+     */
+    @Deprecated
+    private double arraysSimilarity(@NonNull INDArray array1,@NonNull INDArray array2) {
         if (array1.equals(array2)) return 1.0;
 
         INDArray vector = Transforms.unitVec(array1);
         INDArray vector2 = Transforms.unitVec(array2);
+
         if(vector == null || vector2 == null)
             return -1;
+
         return  Nd4j.getBlasWrapper().dot(vector, vector2);
 
     }

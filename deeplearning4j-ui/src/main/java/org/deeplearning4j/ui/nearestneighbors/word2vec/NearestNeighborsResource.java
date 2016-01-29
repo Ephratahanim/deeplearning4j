@@ -26,6 +26,7 @@ import org.deeplearning4j.clustering.vptree.VPTree;
 import org.deeplearning4j.models.embeddings.WeightLookupTable;
 import org.deeplearning4j.models.embeddings.inmemory.InMemoryLookupTable;
 import org.deeplearning4j.models.embeddings.loader.WordVectorSerializer;
+import org.deeplearning4j.models.embeddings.reader.impl.BasicModelUtils;
 import org.deeplearning4j.models.embeddings.wordvectors.WordVectors;
 import org.deeplearning4j.models.word2vec.VocabWord;
 import org.deeplearning4j.models.word2vec.wordstore.VocabCache;
@@ -68,7 +69,8 @@ public class NearestNeighborsResource extends FileResource {
     @Produces(MediaType.APPLICATION_JSON)
     public Response getVocab() {
         List<String> words = new ArrayList<>();
-        for(VocabWord word : vectors.vocab().vocabWords())
+        VocabCache<VocabWord> vocabCache = vectors.vocab();
+        for(VocabWord word : vocabCache.vocabWords())
             words.add(word.getWord());
         return Response.ok((new ArrayList<>(words))).build();
     }
@@ -78,9 +80,11 @@ public class NearestNeighborsResource extends FileResource {
     @Path("/words")
     public Response getWords(NearestNeighborsQuery query) {
         Collection<String> nearestNeighors = vectors.wordsNearest(query.getWord(),query.getNumWords());
-        Map<String,Double> map = new HashedMap();
-        for(String s : nearestNeighors)
-            map.put(s,0.0);
+        Map<String,Double> map = new LinkedHashMap<>();
+        for(String s : nearestNeighors) {
+            double sim = vectors.similarity(query.getWord(), s);
+            map.put(s, sim);
+        }
         return Response.ok(map).build();
     }
 
@@ -93,7 +97,7 @@ public class NearestNeighborsResource extends FileResource {
             else {
                 vectors = WordVectorSerializer.fromPair(WordVectorSerializer.loadTxt(path));
             }
-
+            vectors.setModelUtils(new BasicModelUtils());
         } catch (Exception e) {
             e.printStackTrace();
         }

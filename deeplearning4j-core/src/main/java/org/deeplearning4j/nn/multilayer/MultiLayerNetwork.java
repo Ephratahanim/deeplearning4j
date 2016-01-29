@@ -19,7 +19,6 @@
 package org.deeplearning4j.nn.multilayer;
 
 
-import org.apache.commons.lang3.ArrayUtils;
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.*;
@@ -34,11 +33,13 @@ import org.deeplearning4j.nn.layers.convolution.subsampling.SubsamplingLayer;
 import org.deeplearning4j.nn.layers.factory.LayerFactories;
 import org.deeplearning4j.nn.layers.recurrent.BaseRecurrentLayer;
 import org.deeplearning4j.nn.params.DefaultParamInitializer;
+import org.deeplearning4j.nn.updater.UpdaterCreator;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.Solver;
 import org.deeplearning4j.optimize.api.ConvexOptimizer;
 import org.deeplearning4j.optimize.api.IterationListener;
 import org.deeplearning4j.util.MultiLayerUtil;
+import org.deeplearning4j.util.TimeSeriesUtils;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
@@ -702,6 +703,17 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
         return feedForward();
     }
 
+    /** Compute the activations from the input to the output layer, given mask arrays (that may be null)
+     * The masking arrays are used in situations such an one-to-many and many-to-one rucerrent neural network (RNN)
+     * designs, as well as for supporting time series of varying lengths within the same minibatch for RNNs.
+     */
+    public List<INDArray> feedForward(INDArray input, INDArray featuresMask, INDArray labelsMask){
+        setLayerMaskArrays(featuresMask,labelsMask);
+        List<INDArray> list = feedForward(input);
+        clearLayerMaskArrays();
+        return list;
+    }
+
 
     @Override
     public Gradient gradient() {
@@ -864,9 +876,9 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
         MultiLayerNetwork ret;
         try {
             Constructor<MultiLayerNetwork> constructor = (Constructor<MultiLayerNetwork>) getClass().getDeclaredConstructor(MultiLayerConfiguration.class);
-            ret = constructor.newInstance(getLayerWiseConfigurations());
+            ret = constructor.newInstance(getLayerWiseConfigurations().clone());
             ret.update(this);
-
+            ret.setParameters(params().dup());
         } catch (Exception e) {
             throw new IllegalStateException("Unable to clone network",e);
         }
@@ -950,17 +962,16 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
      */
     @Override
     public int numParams() {
-        int length = 0;
-        for (int i = 0; i < layers.length; i++)
-            length += layers[i].numParams();
-
-        return length;
-
+        return numParams(false);
     }
 
     @Override
     public int numParams(boolean backwards) {
-        return numParams();
+        int length = 0;
+        for (int i = 0; i < layers.length; i++)
+            length += layers[i].numParams(backwards);
+
+        return length;
     }
 
     /**
@@ -1123,7 +1134,7 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
             iter.reset();
             while (iter.hasNext()) {
                 DataSet next = iter.next();
-                if (next.getFeatureMatrix() == null || next.getLabels() == null)
+                if (next == null || next.getFeatureMatrix() == null || next.getLabels() == null)
                     break;
                 setInput(next.getFeatureMatrix());
                 setLabels(next.getLabels());
@@ -1132,11 +1143,16 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
 
         }
         if (layerWiseConfigurations.isBackprop()) {
-            iter.reset();
+            if(layerWiseConfigurations.isPretrain())
+                iter.reset();
             while (iter.hasNext()) {
                 DataSet next = iter.next();
                 if (next.getFeatureMatrix() == null || next.getLabels() == null)
                     break;
+
+                boolean hasMaskArrays = next.hasMaskArrays();
+                if(hasMaskArrays) setLayerMaskArrays(next.getFeaturesMaskArray(), next.getLabelsMaskArray());
+
                 if(layerWiseConfigurations.getBackpropType() == BackpropType.TruncatedBPTT) {
                     doTruncatedBPTT(next.getFeatureMatrix(),next.getLabels());
                 }
@@ -1151,6 +1167,8 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
                     }
                     solver.optimize();
                 }
+
+                if(hasMaskArrays) clearLayerMaskArrays();
             }
         }
     }
@@ -1506,7 +1524,10 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
      */
     @Override
     public void fit(org.nd4j.linalg.dataset.api.DataSet data) {
+        boolean hasMaskArrays = data.hasMaskArrays();
+        if(hasMaskArrays) setLayerMaskArrays(data.getFeaturesMaskArray(), data.getLabelsMaskArray());
         fit(data.getFeatureMatrix(), data.getLabels());
+        if(hasMaskArrays) clearLayerMaskArrays();
     }
 
     /**
@@ -1561,6 +1582,17 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
         List<INDArray> activations = feedForward(input, train);
         //last activation is output
         return activations.get(activations.size() - 1);
+    }
+
+    /** Calculate the output of the network, with masking arrays. The masking arrays are used in situations such
+     * as one-to-many and many-to-one recurrent neural network (RNN) designs, as well as for supporting time series
+     * of varying lengths within the same minibatch.
+     */
+    public INDArray output(INDArray input, boolean train, INDArray featuresMask, INDArray labelsMask){
+        setLayerMaskArrays(featuresMask,labelsMask);
+        INDArray out = output(input, train);
+        clearLayerMaskArrays();
+        return out;
     }
 
     /**
@@ -1620,10 +1652,23 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
      * @param network the network to getFromOrigin parameters from
      */
     public void update(MultiLayerNetwork network) {
-        this.defaultConfiguration = network.defaultConfiguration;
-        if(network.input != null) setInput(network.input);
+        this.defaultConfiguration = (network.defaultConfiguration != null ? network.defaultConfiguration.clone() : null);
+        if(network.input != null) setInput(network.input.dup());    //Dup in case of dropout etc
         this.labels = network.labels;
-        this.layers = ArrayUtils.clone(network.layers);
+        if(network.layers != null){
+            layers = new Layer[network.layers.length];
+            for( int i=0; i<layers.length; i++ ){
+                layers[i] = network.layers[i].clone();
+            }
+        } else {
+            this.layers = null;
+        }
+        if(network.solver != null){
+            //Network updater state: should be cloned over also
+            this.setUpdater(network.getUpdater().clone());
+        } else {
+            this.solver = null;
+        }
     }
 
 
@@ -1671,6 +1716,8 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
      * @return the score (value of the loss function)
      */
     public double score(DataSet data, boolean training){
+        boolean hasMaskArray = data.hasMaskArrays();
+        if(hasMaskArray) setLayerMaskArrays(data.getFeaturesMaskArray(),data.getLabelsMaskArray());
         feedForward(data.getFeatureMatrix());
         setLabels(data.getLabels());
         if( getOutputLayer() instanceof BaseOutputLayer ){
@@ -1682,6 +1729,7 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
             log.warn("Cannot calculate score wrt labels without an OutputLayer");
             return 0.0;
         }
+        if(hasMaskArray) clearLayerMaskArrays();
         return score();
     }
 
@@ -1704,6 +1752,11 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
     @Override
     public double score() {
         return score;
+    }
+
+
+    public void setScore(double score) {
+        this.score = score;
     }
 
     @Override
@@ -2106,6 +2159,11 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
         return input.size(0);
     }
 
+    @Override
+    public void setMaskArray(INDArray maskArray) {
+        throw new UnsupportedOperationException();
+    }
+
     /**
      *
      * If this MultiLayerNetwork contains one or more RNN layers: conduct forward pass (prediction)
@@ -2212,20 +2270,71 @@ public class MultiLayerNetwork implements Serializable, Classifier, Layer {
     }
 
     /** Get the updater for this MultiLayerNetwork
-     * @return Updater, or null if updater has not been created (i.e., fit not called)
+     * @return Updater for MultiLayerNetwork
      */
-    public Updater getUpdater(){
-        if(solver==null) return null;
+    public synchronized Updater getUpdater() {
+        if(solver == null){
+            solver = new Solver.Builder()
+                    .configure(conf())
+                    .listeners(getListeners())
+                    .model(this).build();
+            solver.getOptimizer().setUpdater(UpdaterCreator.getUpdater(this));
+        }
         return solver.getOptimizer().getUpdater();
     }
 
-    public void setUpdater(Updater updater){
-        if( solver == null) {
+    /** Set the updater for the MultiLayerNetwork */
+    public void setUpdater(Updater updater) {
+        if(solver == null) {
             solver = new Solver.Builder()
                     .configure(conf())
                     .listeners(getListeners())
                     .model(this).build();
         }
         solver.getOptimizer().setUpdater(updater);
+    }
+
+    /**Set the mask arrays for features and labels. Mask arrays are typically used in situations such as one-to-many
+     * and many-to-one learning with recurrent neural networks, as well as for supporting time series of varying lengths
+     * within the same minibatch.<br>
+     * For example, with RNN data sets with input of shape [miniBatchSize,nIn,timeSeriesLength] and outputs of shape
+     * [miniBatchSize,nOut,timeSeriesLength], the features and mask arrays will have shape [miniBatchSize,timeSeriesLength]
+     * and contain values 0 or 1 at each element (to specify whether a given input/example is present - or merely padding -
+     * at a given time step).<br>
+     * <b>NOTE</b>: This method is not usually used directly. Instead, methods such as {@link #feedForward(INDArray, INDArray, INDArray)}
+     * and {@link #output(INDArray, boolean, INDArray, INDArray)} handle setting of masking internally.
+     * @param featuresMaskArray Mask array for features (input)
+     * @param labelsMaskArray Mask array for labels (output)
+     * @see #clearLayerMaskArrays()
+     */
+    public void setLayerMaskArrays(INDArray featuresMaskArray, INDArray labelsMaskArray){
+        if(featuresMaskArray != null){
+            //feedforward layers below a RNN layer: need the input (features) mask array
+
+            //Now, if mask array is 2d -> need to reshape to 1d (column vector) in the exact same order
+            // as is done for 3d -> 2d time series reshaping
+            INDArray reshapedFeaturesMask = TimeSeriesUtils.reshapeTimeSeriesMaskToVector(featuresMaskArray);
+
+            for( int i=0; i<layers.length-1; i++ ){
+                Type t = layers[i].type();
+                if( t == Type.CONVOLUTIONAL || t == Type.FEED_FORWARD ){
+                    layers[i].setMaskArray(reshapedFeaturesMask);
+                } else if( t == Type.RECURRENT ) break;
+
+            }
+        }
+        if(labelsMaskArray != null ){
+            if(!(layers[layers.length-1] instanceof BaseOutputLayer) ) return;
+            layers[layers.length-1].setMaskArray(labelsMaskArray);
+        }
+    }
+
+    /** Remove the mask arrays from all layers.<br>
+     * See {@link #setLayerMaskArrays(INDArray, INDArray)} for details on mask arrays.
+     */
+    public void clearLayerMaskArrays(){
+        for (Layer layer : layers) {
+            layer.setMaskArray(null);
+        }
     }
 }

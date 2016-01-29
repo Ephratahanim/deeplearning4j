@@ -19,18 +19,22 @@
 package org.deeplearning4j.models.embeddings.inmemory;
 
 import com.google.common.util.concurrent.AtomicDouble;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.Setter;
 import org.apache.commons.math3.util.FastMath;
+import org.deeplearning4j.models.sequencevectors.sequence.SequenceElement;
 import org.deeplearning4j.models.embeddings.WeightLookupTable;
-import org.deeplearning4j.models.word2vec.VocabWord;
 import org.deeplearning4j.models.word2vec.Word2Vec;
 import org.deeplearning4j.models.word2vec.wordstore.VocabCache;
 import org.deeplearning4j.plot.Tsne;
-import org.deeplearning4j.plot.dropwizard.RenderApplication;
+//import org.deeplearning4j.ui.UiServer;
 import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.api.buffer.FloatBuffer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.api.rng.Random;
 import org.nd4j.linalg.factory.Nd4j;
+import org.nd4j.linalg.learning.AdaGrad;
 
 import java.io.IOException;
 import java.util.*;
@@ -42,7 +46,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * @author Adam Gibson
  */
-public class InMemoryLookupTable implements WeightLookupTable {
+public class InMemoryLookupTable<T extends SequenceElement> implements WeightLookupTable<T> {
 
 
     protected INDArray syn0,syn1;
@@ -56,9 +60,12 @@ public class InMemoryLookupTable implements WeightLookupTable {
     protected INDArray table,syn1Neg;
     protected boolean useAdaGrad;
     protected double negative = 0;
-    protected VocabCache vocab;
+    protected VocabCache<T> vocab;
     protected Map<Integer,INDArray> codes = new ConcurrentHashMap<>();
 
+    protected AdaGrad adaGrad;
+
+    @Getter @Setter protected Long tableId;
 
     public InMemoryLookupTable() {}
 
@@ -70,6 +77,14 @@ public class InMemoryLookupTable implements WeightLookupTable {
         this.rng = gen;
         this.negative = negative;
         initExpTable();
+
+        if (useAdaGrad) {
+            initAdaGrad();
+        }
+    }
+
+    protected void initAdaGrad() {
+        adaGrad = new AdaGrad(new int[] {vocab.numWords()+1, vectorLength} , lr.get());
     }
 
     public double[] getExpTable() {
@@ -78,6 +93,12 @@ public class InMemoryLookupTable implements WeightLookupTable {
 
     public void setExpTable(double[] expTable) {
         this.expTable = expTable;
+    }
+
+    public double getGradient(int column, double gradient) {
+        if (adaGrad == null)
+            initAdaGrad();
+        return  adaGrad.getGradient(gradient, column, syn0.shape());
     }
 
     @Override
@@ -92,7 +113,7 @@ public class InMemoryLookupTable implements WeightLookupTable {
         if(syn0 == null || reset) {
             syn0 = Nd4j.rand(new int[]{vocab.numWords() + 1, vectorLength}, rng).subi(0.5).divi(vectorLength);
             INDArray randUnk = Nd4j.rand(1, vectorLength, rng).subi(0.5).divi(vectorLength);
-            putVector(Word2Vec.UNK, randUnk);
+//            putVector(Word2Vec.UNK, randUnk);
         }
         if(syn1 == null || reset)
             syn1 = Nd4j.create(syn0.shape());
@@ -101,6 +122,7 @@ public class InMemoryLookupTable implements WeightLookupTable {
 
     @Override
     public void plotVocab(Tsne tsne) {
+
         try {
             List<String> plot = new ArrayList<>();
             for(String s : vocab.words()) {
@@ -112,7 +134,17 @@ public class InMemoryLookupTable implements WeightLookupTable {
         }
 
         try {
-            RenderApplication.main(null);
+/*            UiServer server = UiServer.getInstance();
+
+            System.out.println("Please open your browser and navigate to: http://localhost:" + server.getPort() + "/");
+*/
+            /*
+                TODO: push 2D coordinates to the UIServer here, since we don't want to tie TSNE to IterationListener mechanics: it will be too much data updated
+             */
+
+
+            // we don't need older render engine anymore
+            // RenderApplication.main(null);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -126,15 +158,8 @@ public class InMemoryLookupTable implements WeightLookupTable {
         Tsne tsne = new Tsne.Builder()
                 .normalize(false).setFinalMomentum(0.8f)
                 .setMaxIter(1000).build();
-        try {
-            List<String> plot = new ArrayList<>();
-            for(String s : vocab.words()) {
-                plot.add(s);
-            }
-            tsne.plot(syn0, 2, plot);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+
+        plotVocab(tsne);
     }
 
 
@@ -162,13 +187,13 @@ public class InMemoryLookupTable implements WeightLookupTable {
     protected void initNegative() {
         if(negative > 0) {
             syn1Neg = Nd4j.zeros(syn0.shape());
-            makeTable(10000,0.75);
+            makeTable(Math.max(expTable.length, 100000),0.75);
         }
     }
 
 
     protected void initExpTable() {
-        expTable = new double[1000];
+        expTable = new double[100000];
         for (int i = 0; i < expTable.length; i++) {
             double tmp =   FastMath.exp((i / (double) expTable.length * 2 - 1) * MAX_EXP);
             expTable[i]  = tmp / (tmp + 1.0);
@@ -187,8 +212,9 @@ public class InMemoryLookupTable implements WeightLookupTable {
      * @param nextRandom next random for sampling
      */
     @Override
-    public  void iterateSample(VocabWord w1, VocabWord w2,AtomicLong nextRandom,double alpha) {
-        if(w2 == null || w2.getIndex() < 0 || w1.getIndex() == w2.getIndex() || w1.getWord().equals("STOP") || w2.getWord().equals("STOP") || w1.getWord().equals("UNK") || w2.getWord().equals("UNK"))
+    @Deprecated
+    public  void iterateSample(T w1, T w2,AtomicLong nextRandom,double alpha) {
+        if(w2 == null || w2.getIndex() < 0 || w1.getIndex() == w2.getIndex() || w1.getLabel().equals("STOP") || w2.getLabel().equals("STOP") || w1.getLabel().equals("UNK") || w2.getLabel().equals("UNK"))
            return;
             //current word vector
         INDArray l1 = this.syn0.slice(w2.getIndex());
@@ -221,7 +247,7 @@ public class InMemoryLookupTable implements WeightLookupTable {
             //score
             double f =  expTable[idx];
             //gradient
-            double g = useAdaGrad ?  w1.getGradient(i, (1 - code - f)) : (1 - code - f) * alpha;
+            double g = useAdaGrad ?  w1.getGradient(i, (1 - code - f), lr.get()) : (1 - code - f) * alpha;
 
             if(neu1e.data().dataType() == DataBuffer.Type.FLOAT) {
                 Nd4j.getBlasWrapper().level1().axpy(syn1.length(), g, syn1, neu1e);
@@ -268,11 +294,11 @@ public class InMemoryLookupTable implements WeightLookupTable {
                 double f = Nd4j.getBlasWrapper().dot(l1,syn1Neg.slice(target));
                 double g;
                 if (f > MAX_EXP)
-                    g = useAdaGrad ? w1.getGradient(target, (label - 1)) : (label - 1) *  alpha;
+                    g = useAdaGrad ? w1.getGradient(target, (label - 1), alpha) : (label - 1) *  alpha;
                 else if (f < -MAX_EXP)
-                    g = label * (useAdaGrad ?  w1.getGradient(target, alpha) : alpha);
+                    g = label * (useAdaGrad ?  w1.getGradient(target, alpha, alpha) : alpha);
                 else
-                    g = useAdaGrad ? w1.getGradient(target, label - expTable[(int)((f + MAX_EXP) * (expTable.length / MAX_EXP / 2))]) : (label - expTable[(int)((f + MAX_EXP) * (expTable.length / MAX_EXP / 2))]) *   alpha;
+                    g = useAdaGrad ? w1.getGradient(target, label - expTable[(int)((f + MAX_EXP) * (expTable.length / MAX_EXP / 2))], alpha) : (label - expTable[(int)((f + MAX_EXP) * (expTable.length / MAX_EXP / 2))]) *   alpha;
                 if(syn0.data().dataType() == DataBuffer.Type.DOUBLE)
                     Nd4j.getBlasWrapper().axpy(g,syn1Neg.slice(target),neu1e);
                 else
@@ -289,6 +315,8 @@ public class InMemoryLookupTable implements WeightLookupTable {
 
         else
             Nd4j.getBlasWrapper().axpy(1.0f,neu1e,l1);
+
+
     }
 
     public boolean isUseAdaGrad() {
@@ -314,7 +342,8 @@ public class InMemoryLookupTable implements WeightLookupTable {
      * @param w2 the second word to iterate on
      */
     @Override
-    public  void iterate(VocabWord w1, VocabWord w2) {
+    public  void iterate(T w1, T w2) {
+    /*
         if(w2.getIndex() < 0)
             return;
         //current word vector
@@ -375,8 +404,7 @@ public class InMemoryLookupTable implements WeightLookupTable {
 
 
 
-
-
+        */
     }
 
 
@@ -522,14 +550,21 @@ public class InMemoryLookupTable implements WeightLookupTable {
         this.syn1 = syn1;
     }
 
-    public int getVectorLength() {
-        return vectorLength;
+    @Override
+    public VocabCache<T> getVocabCache() {
+        return vocab;
     }
 
     public void setVectorLength(int vectorLength) {
         this.vectorLength = vectorLength;
     }
 
+    /**
+     * This method is deprecated, since all logic was pulled out from this class and is not used anymore.
+     * However this method will be around for a while, due to backward compatibility issues.
+     * @return initial learning rate
+     */
+    @Deprecated
     public AtomicDouble getLr() {
         return lr;
     }
@@ -554,58 +589,63 @@ public class InMemoryLookupTable implements WeightLookupTable {
         this.codes = codes;
     }
 
-    public static class Builder {
+    public static class Builder<T extends SequenceElement> {
         protected int vectorLength = 100;
         protected boolean useAdaGrad = false;
         protected double lr = 0.025;
         protected Random gen = Nd4j.getRandom();
         protected long seed = 123;
         protected double negative = 0;
-        protected VocabCache vocabCache;
+        protected VocabCache<T> vocabCache;
 
 
 
 
 
-        public Builder cache(VocabCache vocab) {
+        public Builder<T> cache(@NonNull VocabCache<T> vocab) {
             this.vocabCache = vocab;
             return this;
         }
 
-        public Builder negative(double negative) {
+        public Builder<T> negative(double negative) {
             this.negative = negative;
             return this;
         }
 
-        public Builder vectorLength(int vectorLength) {
+        public Builder<T> vectorLength(int vectorLength) {
             this.vectorLength = vectorLength;
             return this;
         }
 
-        public Builder useAdaGrad(boolean useAdaGrad) {
+        public Builder<T> useAdaGrad(boolean useAdaGrad) {
             this.useAdaGrad = useAdaGrad;
             return this;
         }
 
-
-        public Builder lr(double lr) {
+        /**
+         * This method is deprecated, since all logic was pulled out from this class
+         * @param lr
+         * @return
+         */
+        @Deprecated
+        public Builder<T> lr(double lr) {
             this.lr = lr;
             return this;
         }
 
-        public Builder gen(Random gen) {
+        public Builder<T> gen(Random gen) {
             this.gen = gen;
             return this;
         }
 
-        public Builder seed(long seed) {
+        public Builder<T> seed(long seed) {
             this.seed = seed;
             return this;
         }
 
 
 
-        public WeightLookupTable build() {
+        public WeightLookupTable<T> build() {
             if(vocabCache == null)
                 throw new IllegalStateException("Vocab cache must be specified");
 
@@ -630,5 +670,29 @@ public class InMemoryLookupTable implements WeightLookupTable {
                 ", vocab=" + vocab +
                 ", codes=" + codes +
                 '}';
+    }
+
+    /**
+     * This method consumes weights of a given InMemoryLookupTable
+     *
+     * PLEASE NOTE: this method explicitly resets current weights
+     *
+     * @param srcTable
+     */
+    public void consume(InMemoryLookupTable<T> srcTable) {
+        if (srcTable.vectorLength != this.vectorLength)
+            throw new IllegalStateException("You can't consume lookupTable with different vector lengths");
+
+        if (srcTable.syn0 == null)
+            throw new IllegalStateException("Source lookupTable Syn0 is NULL");
+
+        this.resetWeights(true);
+
+        if (srcTable.syn0.rows() > this.syn0.rows())
+            throw new IllegalStateException("You can't consume lookupTable with built for larger vocabulary without updating your vocabulary first");
+
+        for (int x = 0; x < srcTable.syn0.rows(); x++) {
+            this.syn0.putRow(x, srcTable.syn0.getRow(x).dup());
+        }
     }
 }

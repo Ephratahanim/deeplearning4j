@@ -23,6 +23,8 @@ import org.nd4j.linalg.dataset.DataSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
+
 /**
  * A dataset iterator for doing multiple passes over a dataset
  */
@@ -50,19 +52,27 @@ public class MultipleEpochsIterator implements DataSetIterator {
     @Override
     public DataSet next(int num) {
         if(!iter.hasNext()) {
+            passes++;
             log.info("Epoch " + passes + ", number of batches completed " + batch);
             if(passes < numPasses) {
-                passes++;
                 batch = 0;
                 iter.reset();
+            } else {
+                return null;
             }
         }
         batch++;
 
-        DataSet next = iter.next(num);
+        DataSet next = num == -1? iter.next(): iter.next(num);
         if(preProcessor != null)
             preProcessor.preProcess(next);
         return next;
+    }
+
+
+    @Override
+    public DataSet next() {
+        return next(-1);
     }
 
     /**
@@ -140,6 +150,10 @@ public class MultipleEpochsIterator implements DataSetIterator {
         this.preProcessor = (DataSetPreProcessor) preProcessor;
     }
 
+    @Override
+    public List<String> getLabels() {
+        return null;
+    }
 
 
     /**
@@ -151,34 +165,8 @@ public class MultipleEpochsIterator implements DataSetIterator {
      */
     @Override
     public boolean hasNext() {
-        return iter.hasNext() || passes < numPasses;
+        return iter.hasNext() && passes < numPasses;
     }
-
-    /**
-     * Returns the next element in the iteration.
-     *
-     * @return the next element in the iteration
-     */
-    @Override
-    public DataSet next() {
-        if(!iter.hasNext()) {
-            log.info("Epoch " + passes + " batch " + batch);
-            if(passes < numPasses) {
-                passes++;
-                batch = 0;
-                iter.reset();
-            }
-        }
-        batch++;
-
-        DataSet next = iter.next();
-        if(preProcessor != null)
-            preProcessor.preProcess(next);
-        return next;
-    }
-
-
-
 
     /**
      * Removes from the underlying collection the last element returned

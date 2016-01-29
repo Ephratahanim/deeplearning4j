@@ -33,9 +33,7 @@ import lombok.NoArgsConstructor;
 import org.deeplearning4j.nn.conf.GradientNormalization;
 import org.deeplearning4j.nn.conf.Updater;
 import org.deeplearning4j.nn.conf.distribution.Distribution;
-import org.deeplearning4j.nn.layers.normalization.LocalResponseNormalization;
 import org.deeplearning4j.nn.weights.WeightInit;
-import org.nd4j.linalg.api.ndarray.INDArray;
 
 /**
  * A neural network layer.
@@ -46,6 +44,7 @@ import org.nd4j.linalg.api.ndarray.INDArray;
         @JsonSubTypes.Type(value = ConvolutionLayer.class, name = "convolution"),
         @JsonSubTypes.Type(value = ImageLSTM.class, name = "imageLSTM"),
         @JsonSubTypes.Type(value = GravesLSTM.class, name = "gravesLSTM"),
+        @JsonSubTypes.Type(value = GravesBidirectionalLSTM.class, name = "gravesBidirectionalLSTM"),
         @JsonSubTypes.Type(value = GRU.class, name = "gru"),
         @JsonSubTypes.Type(value = OutputLayer.class, name = "output"),
         @JsonSubTypes.Type(value = RnnOutputLayer.class, name = "rnnoutput"),
@@ -120,7 +119,7 @@ public abstract class Layer implements Serializable, Cloneable {
 
 
     public abstract static class Builder<T extends Builder<T>> {
-        protected String layerName = "genisys";
+        protected String layerName = null;
         protected String activationFunction = null;
         protected WeightInit weightInit = null;
         protected double biasInit = Double.NaN;

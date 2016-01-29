@@ -4,6 +4,7 @@ import lombok.NonNull;
 
 
 import java.io.*;
+import java.util.Iterator;
 
 /**
  * Primitive single-line iterator, without any options involved.
@@ -13,7 +14,7 @@ import java.io.*;
  *
  * @author raver119@gmail.com
   */
-public class BasicLineIterator implements SentenceIterator {
+public class BasicLineIterator implements SentenceIterator, Iterable<String> {
 
     private BufferedReader reader;
     private InputStream backendStream;
@@ -27,7 +28,7 @@ public class BasicLineIterator implements SentenceIterator {
 
     public BasicLineIterator(@NonNull InputStream stream) {
         this.backendStream = stream;
-        reader = new BufferedReader(new InputStreamReader(stream));
+        reader = new BufferedReader(new InputStreamReader(new BufferedInputStream(backendStream, 10 * 1024 * 1024)));
     }
 
     public BasicLineIterator(@NonNull String filePath) throws FileNotFoundException {
@@ -59,7 +60,7 @@ public class BasicLineIterator implements SentenceIterator {
             if (backendStream instanceof FileInputStream) {
                 ((FileInputStream) backendStream).getChannel().position(0);
             } else backendStream.reset();
-            reader = new BufferedReader(new InputStreamReader(backendStream));
+            reader = new BufferedReader(new InputStreamReader(new BufferedInputStream(backendStream, 8192)));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -95,5 +96,34 @@ public class BasicLineIterator implements SentenceIterator {
             e.printStackTrace();
         }
         super.finalize();
+    }
+
+    /**
+     * Implentation for Iterable interface.
+     * Please note: each call for iterator() resets underlying SentenceIterator to the beginning;
+     *
+     * @return
+     */
+    @Override
+    public Iterator<String> iterator() {
+        this.reset();
+        Iterator<String> ret =  new Iterator<String>() {
+            @Override
+            public boolean hasNext() {
+                return BasicLineIterator.this.hasNext();
+            }
+
+            @Override
+            public String next() {
+                return BasicLineIterator.this.nextSentence();
+            }
+
+            @Override
+            public void remove() {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        return ret;
     }
 }

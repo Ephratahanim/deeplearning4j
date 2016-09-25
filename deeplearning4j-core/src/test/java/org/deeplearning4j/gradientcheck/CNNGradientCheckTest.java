@@ -5,25 +5,21 @@ import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.Updater;
-import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
+import org.deeplearning4j.nn.conf.inputs.InputType;
 import org.deeplearning4j.nn.conf.layers.ConvolutionLayer;
 import org.deeplearning4j.nn.conf.layers.OutputLayer;
-import org.deeplearning4j.nn.conf.layers.setup.ConvolutionLayerSetup;
-import org.deeplearning4j.nn.conf.preprocessor.CnnToFeedForwardPreProcessor;
-import org.deeplearning4j.nn.conf.preprocessor.FeedForwardToCnnPreProcessor;
+import org.deeplearning4j.nn.conf.layers.SubsamplingLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.junit.Test;
 import org.nd4j.linalg.api.buffer.DataBuffer;
+import org.nd4j.linalg.api.buffer.util.DataTypeUtil;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
-import org.nd4j.linalg.factory.NDArrayFactory;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
 
-import java.util.Random;
-
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Created by nyghtowl on 9/1/15.
@@ -32,12 +28,13 @@ public class CNNGradientCheckTest {
     private static final boolean PRINT_RESULTS = true;
     private static final boolean RETURN_ON_FIRST_FAILURE = false;
     private static final double DEFAULT_EPS = 1e-6;
-    private static final double DEFAULT_MAX_REL_ERROR = 0.25;
+    private static final double DEFAULT_MAX_REL_ERROR = 1e-3;
+    private static final double DEFAULT_MIN_ABS_ERROR = 1e-10;
 
     static {
-        Nd4j.dtype = DataBuffer.Type.DOUBLE;
-        NDArrayFactory factory = Nd4j.factory();
-        factory.setDType(DataBuffer.Type.DOUBLE);
+        //Force Nd4j initialization, then set data type to double:
+        Nd4j.zeros(1);
+        DataTypeUtil.setDTypeForContext(DataBuffer.Type.DOUBLE);
     }
 
     @Test
@@ -46,7 +43,7 @@ public class CNNGradientCheckTest {
         // (a) activation function
         // (b) Whether to test at random initialization, or after some learning (i.e., 'characteristic mode of operation')
         // (c) Loss function (with specified output activations)
-        String[] activFns = {"sigmoid","tanh","relu"};
+        String[] activFns = {"sigmoid","tanh"};
         boolean[] characteristic = {false,true};	//If true: run some backprop steps first
 
         LossFunctions.LossFunction[] lossFunctions = {LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD, LossFunctions.LossFunction.MSE};
@@ -66,22 +63,19 @@ public class CNNGradientCheckTest {
                     MultiLayerConfiguration.Builder builder = new NeuralNetConfiguration.Builder()
                             .regularization(false)
                             .optimizationAlgo(OptimizationAlgorithm.CONJUGATE_GRADIENT)
-                            .learningRate(1e-1)
+                            .updater(Updater.NONE)
+                            .weightInit(WeightInit.XAVIER)
                             .seed(12345L)
-                            .list(2)
-                            .layer(0, new ConvolutionLayer.Builder(new int[]{1, 1})
+                            .list()
+                            .layer(0, new ConvolutionLayer.Builder(1, 1)
                                     .nOut(6)
-                                    .weightInit(WeightInit.XAVIER)
                                     .activation(afn)
-                                    .updater(Updater.NONE)
                                     .build())
                             .layer(1, new OutputLayer.Builder(lf)
                                     .activation(outputActivation)
                                     .nOut(3)
-                                    .weightInit(WeightInit.XAVIER)
-                                    .updater(Updater.NONE)
                                     .build())
-                            .cnnInputSize(2,2,1)
+                            .setInputType(InputType.convolutionalFlat(1,4,1))
                             .pretrain(false).backprop(true);
 
                     MultiLayerConfiguration conf = builder.build();
@@ -114,8 +108,8 @@ public class CNNGradientCheckTest {
                             System.out.println("Layer " + j + " # params: " + mln.getLayer(j).numParams());
                     }
 
-                    boolean gradOK = GradientCheckUtil.checkGradients(mln, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR,
-                            PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels, true);
+                    boolean gradOK = GradientCheckUtil.checkGradients(mln, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR, DEFAULT_MIN_ABS_ERROR,
+                            PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels);
 
                     assertTrue(gradOK);
                 }
@@ -131,7 +125,7 @@ public class CNNGradientCheckTest {
         // (a) activation function
         // (b) Whether to test at random initialization, or after some learning (i.e., 'characteristic mode of operation')
         // (c) Loss function (with specified output activations)
-        String[] activFns = {"sigmoid","tanh","relu"};
+        String[] activFns = {"sigmoid","tanh"};
         boolean[] characteristic = {false,true};	//If true: run some backprop steps first
 
         LossFunctions.LossFunction[] lossFunctions = {LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD, LossFunctions.LossFunction.MSE};
@@ -159,23 +153,25 @@ public class CNNGradientCheckTest {
                                 .l2(l2).l1(l1)
                                 .optimizationAlgo(OptimizationAlgorithm.CONJUGATE_GRADIENT)
                                 .seed(12345L)
-                                .list(2)
+                                .list()
                                 .layer(0, new ConvolutionLayer.Builder(new int[]{1, 1})
                                         .nIn(1).nOut(6)
-                                        .weightInit(WeightInit.XAVIER).dist(new NormalDistribution(0, 1))
+                                        .weightInit(WeightInit.XAVIER)
                                         .activation(afn)
                                         .updater(Updater.NONE)
                                         .build())
                                 .layer(1, new OutputLayer.Builder(lf)
                                         .activation(outputActivation)
-                                        .nIn(6).nOut(3)
-                                        .weightInit(WeightInit.XAVIER).dist(new NormalDistribution(0, 1))
+                                        .nOut(3)
+                                        .weightInit(WeightInit.XAVIER)
                                         .updater(Updater.NONE)
                                         .build())
                                 .pretrain(false).backprop(true)
-                                .cnnInputSize(2,2,1);   //Equivalent to: new ConvolutionLayerSetup(builder,2,2,1);
+                        .setInputType(InputType.convolutionalFlat(1,4,1));
 
-                        MultiLayerNetwork mln = new MultiLayerNetwork(builder.build());
+                        MultiLayerConfiguration conf = builder.build();
+
+                        MultiLayerNetwork mln = new MultiLayerNetwork(conf);
                         mln.init();
                         String testName = new Object() {
                         }.getClass().getEnclosingMethod().getName();
@@ -203,8 +199,8 @@ public class CNNGradientCheckTest {
                                 System.out.println("Layer " + j + " # params: " + mln.getLayer(j).numParams());
                         }
 
-                        boolean gradOK = GradientCheckUtil.checkGradients(mln, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR,
-                                PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels, true);
+                        boolean gradOK = GradientCheckUtil.checkGradients(mln, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR, DEFAULT_MIN_ABS_ERROR,
+                                PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels);
 
                         assertTrue(gradOK);
                     }
@@ -214,4 +210,202 @@ public class CNNGradientCheckTest {
     }
 
 
+    @Test
+    public void testCnnWithSubsampling(){
+        int nOut = 4;
+
+        int[] minibatchSizes = {1,3};
+        int width = 5;
+        int height = 5;
+        int inputDepth = 1;
+
+        int[] kernel = {2,2};
+        int[] stride = {1,1};
+        int[] padding = {0,0};
+
+        String[] activations = {"sigmoid","tanh"};
+        SubsamplingLayer.PoolingType[] poolingTypes = new SubsamplingLayer.PoolingType[]{SubsamplingLayer.PoolingType.MAX, SubsamplingLayer.PoolingType.AVG};
+
+        for(String afn : activations) {
+            for (SubsamplingLayer.PoolingType poolingType : poolingTypes) {
+                for (int minibatchSize : minibatchSizes) {
+                    INDArray input = Nd4j.rand(minibatchSize, width * height * inputDepth);
+                    INDArray labels = Nd4j.zeros(minibatchSize, nOut);
+                    for (int i = 0; i < minibatchSize; i++) {
+                        labels.putScalar(new int[]{i, i % nOut}, 1.0);
+                    }
+
+                    MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
+                            .regularization(false)
+                            .learningRate(1.0)
+                            .updater(Updater.SGD)
+                            .list()
+                            .layer(0, new ConvolutionLayer.Builder(kernel, stride, padding)
+                                    .nIn(inputDepth).nOut(3)
+                                    .build())//output: (5-2+0)/1+1 = 4
+                            .layer(1, new SubsamplingLayer.Builder(poolingType)
+                                    .kernelSize(kernel)
+                                    .stride(stride)
+                                    .padding(padding)
+                                    .build())   //output: (4-2+0)/1+1 =3 -> 3x3x3
+                            .layer(2, new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax")
+                                    .nIn(3 * 3 * 3)
+                                    .nOut(4)
+                                    .build())
+                            .setInputType(InputType.convolutionalFlat(height, width, inputDepth))
+                            .build();
+
+                    MultiLayerNetwork net = new MultiLayerNetwork(conf);
+                    net.init();
+
+                    String msg = "PoolingType=" + poolingType + ", minibatch=" + minibatchSize + ", activationFn=" + afn;
+                    System.out.println(msg);
+
+                    boolean gradOK = GradientCheckUtil.checkGradients(net, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR, DEFAULT_MIN_ABS_ERROR,
+                            PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels);
+
+                    assertTrue(msg, gradOK);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testCnnWithSubsamplingV2(){
+        int nOut = 4;
+
+        int[] minibatchSizes = {1,3};
+        int width = 5;
+        int height = 5;
+        int inputDepth = 1;
+
+        int[] kernel = {2,2};
+        int[] stride = {1,1};
+        int[] padding = {0,0};
+
+        String[] activations = {"sigmoid","tanh"};
+        SubsamplingLayer.PoolingType[] poolingTypes = new SubsamplingLayer.PoolingType[]{SubsamplingLayer.PoolingType.MAX, SubsamplingLayer.PoolingType.AVG};
+
+        for(String afn : activations) {
+            for (SubsamplingLayer.PoolingType poolingType : poolingTypes) {
+                for (int minibatchSize : minibatchSizes) {
+                    INDArray input = Nd4j.rand(minibatchSize, width * height * inputDepth);
+                    INDArray labels = Nd4j.zeros(minibatchSize, nOut);
+                    for (int i = 0; i < minibatchSize; i++) {
+                        labels.putScalar(new int[]{i, i % nOut}, 1.0);
+                    }
+
+                    MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
+                            .regularization(false)
+                            .learningRate(1.0)
+                            .updater(Updater.SGD)
+                            .list()
+                            .layer(0, new ConvolutionLayer.Builder(kernel, stride, padding)
+                                    .nIn(inputDepth).nOut(3)
+                                    .build())//output: (5-2+0)/1+1 = 4
+                            .layer(1, new SubsamplingLayer.Builder(poolingType)
+                                    .kernelSize(kernel)
+                                    .stride(stride)
+                                    .padding(padding)
+                                    .build())   //output: (4-2+0)/1+1 =3 -> 3x3x3
+                            .layer(2, new ConvolutionLayer.Builder(kernel, stride, padding)
+                                    .nIn(3).nOut(2)
+                                    .build())   //Output: (3-2+0)/1+1 = 2
+                            .layer(3, new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax")
+                                    .nIn(2 * 2 * 2)
+                                    .nOut(4)
+                                    .build())
+                            .setInputType(InputType.convolutionalFlat(height, width, inputDepth))
+                            .build();
+
+                    MultiLayerNetwork net = new MultiLayerNetwork(conf);
+                    net.init();
+
+                    String msg = "PoolingType=" + poolingType + ", minibatch=" + minibatchSize + ", activationFn=" + afn;
+                    System.out.println(msg);
+
+                    boolean gradOK = GradientCheckUtil.checkGradients(net, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR, DEFAULT_MIN_ABS_ERROR,
+                            PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels);
+
+                    assertTrue(msg, gradOK);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testCnnMultiLayer(){
+        int nOut = 2;
+
+        int[] minibatchSizes = {1,2,5};
+        int width = 5;
+        int height = 5;
+        int[] inputDepths = {1,2,4};
+
+        String[] activations = {"sigmoid","tanh"};
+        SubsamplingLayer.PoolingType[] poolingTypes = new SubsamplingLayer.PoolingType[]{SubsamplingLayer.PoolingType.MAX, SubsamplingLayer.PoolingType.AVG};
+
+        Nd4j.getRandom().setSeed(12345);
+
+        for(int inputDepth : inputDepths) {
+            for (String afn : activations) {
+                for (SubsamplingLayer.PoolingType poolingType : poolingTypes) {
+                    for (int minibatchSize : minibatchSizes) {
+                        INDArray input = Nd4j.rand(minibatchSize, width * height * inputDepth);
+                        INDArray labels = Nd4j.zeros(minibatchSize, nOut);
+                        for (int i = 0; i < minibatchSize; i++) {
+                            labels.putScalar(new int[]{i, i % nOut}, 1.0);
+                        }
+
+                        MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
+                                .seed(12345)
+                                .regularization(false)
+                                .learningRate(1.0)
+                                .updater(Updater.SGD)
+                                .activation(afn)
+                                .list()
+                                .layer(0, new ConvolutionLayer.Builder()
+                                        .kernelSize(2, 2)
+                                        .stride(1, 1)
+                                        .padding(0, 0)
+                                        .nIn(inputDepth).nOut(2)
+                                        .build())//output: (5-2+0)/1+1 = 4
+                                .layer(1, new ConvolutionLayer.Builder()
+                                        .nIn(2).nOut(2)
+                                        .kernelSize(2, 2)
+                                        .stride(1, 1)
+                                        .padding(0, 0)
+                                        .build())   //(4-2+0)/1+1 = 3
+                                .layer(2, new ConvolutionLayer.Builder()
+                                        .nIn(2).nOut(2)
+                                        .kernelSize(2, 2)
+                                        .stride(1, 1)
+                                        .padding(0, 0)
+                                        .build())   //(3-2+0)/1+1 = 2
+                                .layer(3, new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax")
+                                        .nIn(2 * 2 * 2)
+                                        .nOut(nOut)
+                                        .build())
+                                .setInputType(InputType.convolutionalFlat(height, width, inputDepth))
+                                .build();
+
+                        MultiLayerNetwork net = new MultiLayerNetwork(conf);
+                        net.init();
+
+                        for (int i = 0; i < 4; i++) {
+                            System.out.println("nParams, layer " + i + ": " + net.getLayer(i).numParams());
+                        }
+
+                        String msg = "PoolingType=" + poolingType + ", minibatch=" + minibatchSize + ", activationFn=" + afn;
+                        System.out.println(msg);
+
+                        boolean gradOK = GradientCheckUtil.checkGradients(net, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR, DEFAULT_MIN_ABS_ERROR,
+                                PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels);
+
+                        assertTrue(msg, gradOK);
+                    }
+                }
+            }
+        }
+    }
 }

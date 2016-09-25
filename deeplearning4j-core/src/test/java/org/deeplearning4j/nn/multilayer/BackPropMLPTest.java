@@ -1,10 +1,5 @@
 package org.deeplearning4j.nn.multilayer;
 
-import static org.junit.Assert.*;
-
-import java.util.Arrays;
-
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
 import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
@@ -18,10 +13,17 @@ import org.deeplearning4j.nn.params.DefaultParamInitializer;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
 import org.junit.Test;
+import org.nd4j.linalg.api.iter.NdIndexIterator;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions.LossFunction;
+
+import java.util.Arrays;
+
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.fail;
 
 public class BackPropMLPTest {
 
@@ -47,7 +49,9 @@ public class BackPropMLPTest {
         network.init();
         DataSetIterator iter = new IrisDataSetIterator(10,100);
 
-        while( iter.hasNext() ) network.fit(iter.next());
+        while(iter.hasNext()) {
+            network.fit(iter.next());
+        }
     }
 
     @Test
@@ -60,7 +64,9 @@ public class BackPropMLPTest {
 
         DataSetIterator iter = new IrisDataSetIterator(12,120);
 
-        while( iter.hasNext() ) network.fit(iter.next());
+        while(iter.hasNext()) {
+            network.fit(iter.next());
+        }
     }
 
     @Test
@@ -100,7 +106,9 @@ public class BackPropMLPTest {
 
             float[] outputPreSoftmax = new float[3];
             //Normally a matrix multiplication here, but only one hidden unit in this trivial example
-            for( int i=0; i<3; i++ ) outputPreSoftmax[i] = hiddenUnitPostSigmoid*l2WeightsFloat[i]+l2BiasFloatArray[i];
+            for( int i=0; i<3; i++ ) {
+                outputPreSoftmax[i] = hiddenUnitPostSigmoid*l2WeightsFloat[i]+l2BiasFloatArray[i];
+            }
             float[] outputPostSoftmax = softmax(outputPreSoftmax);
 
             //Do backward pass:
@@ -201,7 +209,9 @@ public class BackPropMLPTest {
         if( totalExamples > 150) {
             totalExamples = miniBatchSize * (150/miniBatchSize);
         }
-        if( miniBatchSize > 150 ) fail();
+        if( miniBatchSize > 150 ) {
+            fail();
+        }
         DataSetIterator iris = new IrisDataSetIterator(miniBatchSize,totalExamples);
 
         MultiLayerNetwork network = new MultiLayerNetwork(getIrisMLPSimpleConfig(hiddenLayerSizes,"sigmoid"));
@@ -264,7 +274,7 @@ public class BackPropMLPTest {
             network.computeGradientAndScore();
             Gradient gradient = network.gradientAndScore().getFirst();
 
-            float eps = 1e-6f;
+            float eps = 1e-4f;
             for( int i=0; i<hiddenLayerSizes.length; i++ ){
                 String wKey = i + "_" + DefaultParamInitializer.WEIGHT_KEY;
                 String bKey = i + "_" + DefaultParamInitializer.BIAS_KEY;
@@ -291,11 +301,8 @@ public class BackPropMLPTest {
                 .learningRate(0.1).updater(Updater.SGD)
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
                 .regularization(false)
-                .l1(0.0)
-                .l2(0.0)
-                .momentum(0.0)
                 .seed(12345L)
-                .list(hiddenLayerSizes.length + 1);
+                .list();
 
         for( int i = 0; i < hiddenLayerSizes.length; i++) {
             int nIn = (i == 0 ? 4 : hiddenLayerSizes[i - 1]);
@@ -321,8 +328,10 @@ public class BackPropMLPTest {
     public static float[] asFloat( INDArray arr) {
         int len = arr.length();
         float[] f = new float[len];
-        for( int i = 0; i < len; i++ )
-            f[i] = arr.getFloat(i);
+        NdIndexIterator iterator = new NdIndexIterator('c',arr.shape());
+        for( int i = 0; i < len; i++ ) {
+            f[i] = arr.getFloat(iterator.next());
+        }
         return f;
     }
 
@@ -339,7 +348,9 @@ public class BackPropMLPTest {
 
     public static float[] sigmoid(float[] in) {
         float[] out = new float[in.length];
-        for( int i=0; i<in.length; i++ ) out[i] = sigmoid(in[i]);
+        for( int i=0; i<in.length; i++ ) {
+            out[i] = sigmoid(in[i]);
+        }
         return out;
     }
 
@@ -351,21 +362,29 @@ public class BackPropMLPTest {
 
     public static float[] derivOfSigmoid( float[] in) {
         float[] out = new float[in.length];
-        for( int i=0; i<in.length; i++ ) out[i] = derivOfSigmoid(in[i]);
+        for( int i=0; i<in.length; i++ ) {
+            out[i] = derivOfSigmoid(in[i]);
+        }
         return out;
     }
 
     public static float[] softmax( float[] in) {
         float[] out = new float[in.length];
         float sumExp = 0.0f;
-        for( int i=0; i<in.length; i++ ) sumExp += Math.exp(in[i]);
-        for( int i=0; i<in.length; i++ ) out[i] = (float)Math.exp(in[i])/sumExp;
+        for( int i=0; i<in.length; i++ ) {
+            sumExp += Math.exp(in[i]);
+        }
+        for( int i=0; i<in.length; i++ ) {
+            out[i] = (float)Math.exp(in[i])/sumExp;
+        }
         return out;
     }
 
     public static float[] vectorDifference(float[] x, float[] y){
         float[] out = new float[x.length];
-        for( int i=0; i<x.length; i++ ) out[i] = x[i]-y[i];
+        for( int i=0; i<x.length; i++ ) {
+            out[i] = x[i]-y[i];
+        }
         return out;
     }
 

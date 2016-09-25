@@ -18,12 +18,6 @@
 
 package org.deeplearning4j.clustering.cluster;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Random;
-import java.util.concurrent.ExecutorService;
 import org.apache.commons.lang3.ArrayUtils;
 import org.deeplearning4j.clustering.algorithm.optimisation.ClusteringOptimizationType;
 import org.deeplearning4j.clustering.algorithm.strategy.OptimisationStrategy;
@@ -34,12 +28,19 @@ import org.deeplearning4j.util.MultiThreadUtils;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.factory.Nd4j;
 
+import java.util.*;
+import java.util.concurrent.ExecutorService;
+
 /**
  *
  * Basic cluster utilities
  */
 public class ClusterUtils {
 
+	private ClusterUtils() {
+	}
+
+	/** Classify the set of points base on cluster centers. This also adds each point to the ClusterSet */
 	public static ClusterSetInfo classifyPoints(final ClusterSet clusterSet, List<Point> points,
 												ExecutorService executorService) {
 		final ClusterSetInfo clusterSetInfo = ClusterSetInfo.initialize(clusterSet, true);
@@ -71,7 +72,8 @@ public class ClusterUtils {
 	public static void refreshClustersCenters(final ClusterSet clusterSet, final ClusterSetInfo clusterSetInfo,
 											  ExecutorService executorService) {
 		List<Runnable> tasks = new ArrayList<>();
-		for (int i = 0, j = clusterSet.getClusterCount(); i < j; i++) {
+		int nClusters = clusterSet.getClusterCount();
+		for (int i = 0; i < nClusters; i++) {
 			final Cluster cluster = clusterSet.getClusters().get(i);
 			tasks.add(new Runnable() {
 				public void run() {
@@ -94,8 +96,10 @@ public class ClusterUtils {
 		if (pointsCount == 0)
 			return;
 		Point center = new Point(Nd4j.create(cluster.getPoints().get(0).getArray().length()));
-		for (Point point : cluster.getPoints())
-			center.getArray().addi(point.getArray());
+		for (Point point : cluster.getPoints()) {
+			INDArray arr = point.getArray();
+			center.getArray().addi(arr);
+		}
 		center.getArray().divi(pointsCount);
 		cluster.setCenter(center);
 	}
@@ -115,7 +119,8 @@ public class ClusterUtils {
 		info.setPointDistanceFromCenterVariance(MathUtils.variance(distances));
 	}
 
-	public static INDArray computeSquareDistancesFromNearestCluster(final ClusterSet clusterSet, final List<Point> points, INDArray previousDxs, ExecutorService executorService) {
+	public static INDArray computeSquareDistancesFromNearestCluster(final ClusterSet clusterSet, final List<Point> points,
+																	INDArray previousDxs, ExecutorService executorService) {
 		final int pointsCount = points.size();
 		final INDArray dxs = Nd4j.create(pointsCount);
 		final Cluster newCluster = clusterSet.getClusters().get(clusterSet.getClusters().size()-1);
@@ -175,7 +180,7 @@ public class ClusterUtils {
 							Cluster toCluster = clusterSet.getClusters().get(k);
 							double distance =
 									Nd4j.getExecutioner().execAndReturn(Nd4j.getOpFactory().createAccum(clusterSet.getAccumulation(),
-											fromCluster.getCenter().getArray(),toCluster.getCenter().getArray())).currentResult().doubleValue();
+											fromCluster.getCenter().getArray(),toCluster.getCenter().getArray())).getFinalResult().doubleValue();
 							info.getDistancesBetweenClustersCenters().put(fromCluster.getId(), toCluster.getId(), distance);
 						}
 					} catch (Exception e) {
@@ -198,11 +203,11 @@ public class ClusterUtils {
 			double distance =
 					Nd4j.getExecutioner().execAndReturn(
 							Nd4j.getOpFactory().createAccum(distanceFunction,cluster.getCenter().getArray(),
-							point.getArray())).currentResult().doubleValue();
+							point.getArray())).getFinalResult().doubleValue();
 			info.getPointDistancesFromCenter().put(point.getId(), distance);
 			info.setTotalPointDistanceFromCenter(info.getTotalPointDistanceFromCenter() + distance);
 		}
-		if (cluster.getPoints().size() > 0)
+		if (!cluster.getPoints().isEmpty())
 			info.setAveragePointDistanceFromCenter(info.getTotalPointDistanceFromCenter()/ cluster.getPoints().size());
 		return info;
 	}

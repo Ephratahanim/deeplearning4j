@@ -18,10 +18,10 @@
 
 package org.deeplearning4j.datasets.iterator.impl;
 
-import java.io.IOException;
-
 import org.deeplearning4j.datasets.fetchers.MnistDataFetcher;
 import org.deeplearning4j.datasets.iterator.BaseDatasetIterator;
+
+import java.io.IOException;
 
 /**
  * Mnist data applyTransformToDestination iterator.
@@ -34,7 +34,7 @@ public class MnistDataSetIterator extends BaseDatasetIterator {
 	}
 
     /**Get the specified number of examples for the MNIST training data set.
-     * @param batch the the batch size of the examples
+     * @param batch the batch size of the examples
      * @param numExamples the overall number of examples
      * @param binarize whether to binarize mnist or not
      * @throws IOException

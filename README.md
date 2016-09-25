@@ -2,14 +2,14 @@ Deeplearning4J: Neural Net Platform
 =========================
  
 [![Join the chat at https://gitter.im/deeplearning4j/deeplearning4j](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/deeplearning4j/deeplearning4j?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-
-[![Build Status](https://travis-ci.org/deeplearning4j/deeplearning4j.svg?branch=master)](https://travis-ci.org/deeplearning4j/deeplearning4j)
+[![Maven Central](https://maven-badges.herokuapp.com/maven-central/org.deeplearning4j/deeplearning4j-core/badge.svg)](https://maven-badges.herokuapp.com/maven-central/org.deeplearning4j/deeplearning4j-core)
+[![Javadoc](https://javadoc-emblem.rhcloud.com/doc/org.deeplearning4j/deeplearning4j-core/badge.svg)](http://deeplearning4j.org/doc)
 
 Deeplearning4J is an Apache 2.0-licensed, open-source, distributed neural net library written in Java and Scala.
 
 Deeplearning4J integrates with Hadoop and Spark and runs on several backends that enable use of CPUs and GPUs. The aim is to create a plug-and-play solution that is more convention than configuration, and which allows for fast prototyping. 
 
-Current version in maven central is `0.4-rc3.8`.
+The most recent stable release in Maven Central is `0.5.0`, and the current master is `0.5.1-SNAPSHOT`. For more on working with snapshots, see this [page](http://deeplearning4j.org/snapshot). 
 
 ---
 ## Using Deeplearning4j
@@ -18,7 +18,7 @@ To get started using Deeplearning4j, please go to our [Quickstart](http://deeple
 
 ## Main Features
 - Versatile n-dimensional array class
-- GPU integration
+- GPU integration(Supports devices starting from Kepler,cc3.0. You can check your device's compute compatibility [here](https://developer.nvidia.com/cuda-gpus).)
 - Scalable on Hadoop, Spark and Akka + AWS et al
 
 ---
@@ -40,11 +40,11 @@ To get started using Deeplearning4j, please go to our [Quickstart](http://deeple
 
 ---
 ## Documentation
-Documentation is available at [deeplearning4j.org](http://deeplearning4j.org/) and [JavaDocs](http://deeplearning4j.org/doc/).
+Documentation is available at [deeplearning4j.org](http://deeplearning4j.org) and [JavaDocs](http://deeplearning4j.org/doc).
 
 ## Support
 
-We are not supporting Stackoverflow right now. Github issues should be limited to bug reports. Please join the community on [Gitter](https:://gitter.im/deepelearning4j/deeplearning4j), where we field questions about how to install the software and work with neural nets. 
+We are not supporting Stackoverflow right now. Github issues should be limited to bug reports. Please join the community on [Gitter](https://gitter.im/deepelearning4j/deeplearning4j), where we field questions about how to install the software and work with neural nets. For support from Skymind, please see our [contact page](https://skymind.io/contact). 
 
 ## Installation
 To install Deeplearning4J, there are a couple approaches (briefly described on our [Quickstart](http://deeplearning4j.org/quickstart.html) and below). More information can be found on the [ND4J website](http://nd4j.org/getstarted.html) and [here](http://deeplearning4j.org/gettingstarted.html).
@@ -74,7 +74,7 @@ Then run the following command on the dl4j repo packages to install them on your
     $ sudo yum install [package name] -y
     $ sudo yum install DL4J-Distro -y 
 
-Note, be sure to install the nd4j modules you need first, especially the backend and then install Canova and dl4j.
+Note, be sure to install the ND4J modules you need first, especially the backend and then install DataVec and DL4J.
 
 ---
 ## Contribute

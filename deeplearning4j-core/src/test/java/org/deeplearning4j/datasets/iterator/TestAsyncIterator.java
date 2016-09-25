@@ -1,18 +1,18 @@
 package org.deeplearning4j.datasets.iterator;
 
+import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.DataSetPreProcessor;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
 
 import java.util.List;
 
 import static junit.framework.TestCase.assertTrue;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 /**
  *
@@ -99,6 +99,32 @@ public class TestAsyncIterator {
     }
 
     @Test
+    public void testInitializeNoNextIter(){
+
+        DataSetIterator iter = new IrisDataSetIterator(10,150);
+        while(iter.hasNext()) iter.next();
+
+        DataSetIterator async = new AsyncDataSetIterator(iter,2);
+
+        assertFalse(iter.hasNext());
+        assertFalse(async.hasNext());
+        try{
+            iter.next();
+            fail("Should have thrown NoSuchElementException");
+        }catch(Exception e){
+            //OK
+        }
+
+        async.reset();
+        int count = 0;
+        while(async.hasNext()){
+            async.next();
+            count++;
+        }
+        assertEquals(150/10, count);
+    }
+
+    @Test
     public void testResetWhileBlocking() {
         int size = 6;
         //Test reset while blocking on baseIterator.next()
@@ -167,6 +193,16 @@ public class TestAsyncIterator {
         }
 
         @Override
+        public boolean resetSupported(){
+            return true;
+        }
+
+        @Override
+        public boolean asyncSupported() {
+            return false;
+        }
+
+        @Override
         public void reset() {
             cursor = 0;
         }
@@ -188,6 +224,11 @@ public class TestAsyncIterator {
 
         @Override
         public void setPreProcessor(DataSetPreProcessor preProcessor) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DataSetPreProcessor getPreProcessor() {
             throw new UnsupportedOperationException();
         }
 

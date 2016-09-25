@@ -14,8 +14,6 @@ import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.junit.Test;
 import org.nd4j.linalg.api.ndarray.INDArray;
-import org.nd4j.linalg.cpu.NDArray;
-import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.indexing.INDArrayIndex;
 import org.nd4j.linalg.indexing.NDArrayIndex;
@@ -51,7 +49,7 @@ public class TestVariableLengthTS {
                     .updater(Updater.SGD)
                     .learningRate(0.1)
                     .seed(12345)
-                    .list(2)
+                    .list()
                     .layer(0, new GravesLSTM.Builder().activation("tanh").nIn(2).nOut(2).build())
                     .layer(1, new RnnOutputLayer.Builder().lossFunction(LossFunctions.LossFunction.MSE).nIn(2).nOut(1).build())
                     .build();
@@ -119,7 +117,6 @@ public class TestVariableLengthTS {
                     assertEquals(s, g2s, g2sa);
                 }
             }
-
         }
     }
 
@@ -140,7 +137,7 @@ public class TestVariableLengthTS {
                     .updater(Updater.SGD)
                     .learningRate(0.1)
                     .seed(12345)
-                    .list(4)
+                    .list()
                     .layer(0, new DenseLayer.Builder().activation("tanh").nIn(2).nOut(2).build())
                     .layer(1, new DenseLayer.Builder().activation("tanh").nIn(2).nOut(2).build())
                     .layer(2, new GravesLSTM.Builder().activation("tanh").nIn(2).nOut(2).build())
@@ -174,6 +171,10 @@ public class TestVariableLengthTS {
             net.computeGradientAndScore();
             double score1 = net.score();
             Gradient g1 = net.gradient();
+            Map<String,INDArray> map1 = g1.gradientForVariable();
+            for( String s : map1.keySet()){
+                map1.put(s, map1.get(s).dup()); //Note: gradients are a view normally -> second computeGradientAndScore would have modified the original gradient map values...
+            }
 
             net.setInput(in2);
             net.setLabels(labels2);
@@ -193,6 +194,10 @@ public class TestVariableLengthTS {
                 INDArray g1s = g1map.get(s);
                 INDArray g2s = g2map.get(s);
 
+                System.out.println("-------");
+                System.out.println("Variable: " + s);
+                System.out.println(Arrays.toString(g1s.dup().data().asFloat()));
+                System.out.println(Arrays.toString(g2s.dup().data().asFloat()));
                 assertNotEquals(s, g1s, g2s);
             }
 
@@ -223,10 +228,12 @@ public class TestVariableLengthTS {
             INDArray l0After = temp.preProcess(l0Before, nExamples);
             INDArray l1After = temp.preProcess(l1Before,nExamples);
 
-            for( int j=0; j<nIn; j++){
-
+            for( int j=0; j<nExamples; j++ ){
+                for( int k=0; k<nIn; k++ ) {
+                    assertEquals(0.0, l0After.getDouble(j,k,4),0.0);
+                    assertEquals(0.0, l1After.getDouble(j,k,4),0.0);
+                }
             }
-
         }
     }
 
@@ -266,7 +273,7 @@ public class TestVariableLengthTS {
                         MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
                                 .regularization(false)
                                 .seed(12345L)
-                                .list(2)
+                                .list()
                                 .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(5).weightInit(WeightInit.DISTRIBUTION)
                                         .dist(new NormalDistribution(0, 1)).updater(Updater.NONE).build())
                                 .layer(1, new RnnOutputLayer.Builder(LossFunctions.LossFunction.MSE).activation("identity").nIn(5).nOut(nOut)
@@ -276,8 +283,8 @@ public class TestVariableLengthTS {
                         MultiLayerNetwork mln = new MultiLayerNetwork(conf);
                         mln.init();
 
-                        //MSE loss function: 1/2n * sum(squaredErrors)
-                        double expScore = 0.5 * nOut * (tsLength-nToMask);  //Sum over minibatches, then divide by minibatch size
+                        //MSE loss function: 1/n * sum(squaredErrors)... but sum(squaredErrors) = n * (1-0) here -> sum(squaredErrors)
+                        double expScore = (tsLength-nToMask);  //Sum over minibatches, then divide by minibatch size
 
                         mln.setLayerMaskArrays(null, labelMaskArray);
                         mln.setInput(input);
@@ -325,7 +332,7 @@ public class TestVariableLengthTS {
                         MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
                                 .regularization(false)
                                 .seed(12345L)
-                                .list(2)
+                                .list()
                                 .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(5).weightInit(WeightInit.DISTRIBUTION)
                                         .dist(new NormalDistribution(0, 1)).updater(Updater.NONE).build())
                                 .layer(1, new RnnOutputLayer.Builder(LossFunctions.LossFunction.MSE).activation("identity").nIn(5).nOut(nOut)
@@ -338,7 +345,7 @@ public class TestVariableLengthTS {
                         MultiLayerConfiguration conf2 = new NeuralNetConfiguration.Builder()
                                 .regularization(false)
                                 .seed(12345L)
-                                .list(2)
+                                .list()
                                 .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(5).weightInit(WeightInit.DISTRIBUTION)
                                         .dist(new NormalDistribution(0, 1)).updater(Updater.NONE).build())
                                 .layer(1, new RnnOutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax").nIn(5).nOut(nOut)

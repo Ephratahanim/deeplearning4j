@@ -18,17 +18,12 @@
 
 package org.deeplearning4j.eval;
 
-import static org.junit.Assert.*;
-
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
 import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
+import org.deeplearning4j.datasets.iterator.impl.ListDataSetIterator;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
-import org.deeplearning4j.nn.conf.Updater;
 import org.deeplearning4j.nn.conf.layers.DenseLayer;
-import org.deeplearning4j.nn.layers.OutputLayer;
-import org.deeplearning4j.nn.layers.factory.LayerFactories;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.api.IterationListener;
@@ -37,6 +32,7 @@ import org.junit.Test;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.SplitTestAndTrain;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.indexing.INDArrayIndex;
 import org.nd4j.linalg.indexing.NDArrayIndex;
@@ -44,6 +40,8 @@ import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.nd4j.linalg.util.FeatureUtil;
 
 import java.util.*;
+
+import static org.junit.Assert.*;
 
 /**
  * Created by agibsonccc on 12/22/14.
@@ -57,15 +55,15 @@ public class EvalTest {
         Evaluation eval = new Evaluation(classNum);
 
         // Testing the edge case when some classes do not have true positive
-        INDArray trueOutcome = FeatureUtil.toOutcomeVector(0, 5);
-        INDArray predictedOutcome = FeatureUtil.toOutcomeVector(0, 5);
+        INDArray trueOutcome = FeatureUtil.toOutcomeVector(0, 5);       //[1,0,0,0,0]
+        INDArray predictedOutcome = FeatureUtil.toOutcomeVector(0, 5);  //[1,0,0,0,0]
         eval.eval(trueOutcome, predictedOutcome);
         assertEquals(1, eval.classCount(0));
         assertEquals(1.0, eval.f1(), 1e-1);
 
         // Testing more than one sample. eval() does not reset the Evaluation instance
-        INDArray trueOutcome2 = FeatureUtil.toOutcomeVector(1, 5);
-        INDArray predictedOutcome2 = FeatureUtil.toOutcomeVector(0, 5);
+        INDArray trueOutcome2 = FeatureUtil.toOutcomeVector(1, 5);      //[0,1,0,0,0]
+        INDArray predictedOutcome2 = FeatureUtil.toOutcomeVector(0, 5); //[1,0,0,0,0]
         eval.eval(trueOutcome2, predictedOutcome2);
         // Verified with sklearn in Python
         // from sklearn.metrics import classification_report
@@ -75,12 +73,57 @@ public class EvalTest {
         assertEquals(1, eval.classCount(0));
         // The first entry is 1 label
         assertEquals(1, eval.classCount(1));
-        // Two positives since two entries
-        assertEquals(2, eval.positive(), 0);
+        // Class 0: one positive, one negative -> (one true positive, one false positive); no true/false negatives
+        assertEquals(1, eval.positive().get(0), 0);
+        assertEquals(1, eval.negative().get(0), 0);
+        assertEquals(1, eval.truePositives().get(0), 0);
+        assertEquals(1, eval.falsePositives().get(0), 0);
+        assertEquals(0, eval.trueNegatives().get(0), 0);
+        assertEquals(0, eval.falseNegatives().get(0), 0);
+
+
         // The rest are negative
-        assertEquals(8, eval.negative(), 0);
+        assertEquals(1, eval.negative().get(0), 0);
         // 2 rows and only the first is correct
-        assertEquals(eval.accuracy(), 0.5, 0);
+        assertEquals(0.5, eval.accuracy(), 0);
+    }
+
+    @Test
+    public void testEval2(){
+
+        //Confusion matrix:
+        //actual 0      20      3
+        //actual 1      10      5
+
+        Evaluation evaluation = new Evaluation(Arrays.asList("class0","class1"));
+        INDArray predicted0 = Nd4j.create(new double[]{1,0});
+        INDArray predicted1 = Nd4j.create(new double[]{0,1});
+        INDArray actual0 = Nd4j.create(new double[]{1,0});
+        INDArray actual1 = Nd4j.create(new double[]{0,1});
+        for( int i=0; i<20; i++ ){
+            evaluation.eval(actual0,predicted0);
+        }
+
+        for( int i=0; i<3; i++ ){
+            evaluation.eval(actual0,predicted1);
+        }
+
+        for( int i=0; i<10; i++ ){
+            evaluation.eval(actual1,predicted0);
+        }
+
+        for( int i=0; i<5; i++ ){
+            evaluation.eval(actual1,predicted1);
+        }
+
+        assertEquals(20,evaluation.truePositives().get(0),0);
+        assertEquals(3,evaluation.falseNegatives().get(0),0);
+        assertEquals(10,evaluation.falsePositives().get(0),0);
+        assertEquals(5,evaluation.trueNegatives().get(0),0);
+
+        assertEquals((20.0+5)/(20+3+10+5), evaluation.accuracy(), 1e-6);
+
+        System.out.println(evaluation.confusionToString());
     }
 
     @Test
@@ -106,14 +149,14 @@ public class EvalTest {
         INDArray predictedOutcome = FeatureUtil.toOutcomeVector(0, 2);
 
         Map<Integer, String> labelsMap = new HashMap<>();
-        labelsMap.put(10, "hobbs");
-        labelsMap.put(25, "cal");
+        labelsMap.put(0, "hobbs");
+        labelsMap.put(1, "cal");
 
         Evaluation eval = new Evaluation(labelsMap);
 
         eval.eval(trueOutcome, predictedOutcome);
         assertEquals(1, eval.classCount(0));
-        assertEquals(labelsMap.get(10), eval.getClassLabel(10));
+        assertEquals(labelsMap.get(0), eval.getClassLabel(0));
 
     }
 
@@ -128,7 +171,7 @@ public class EvalTest {
                 .iterations(1)
                 .seed(42)
                 .learningRate(1e-6)
-                .list(2)
+                .list()
                 .layer(0, new DenseLayer.Builder().nIn(4).nOut(2)
                         .activation("tanh")
                         .weightInit(WeightInit.XAVIER)
@@ -138,6 +181,7 @@ public class EvalTest {
                         .weightInit(WeightInit.XAVIER)
                         .activation("softmax")
                         .build())
+
                 .build();
 
         // Instantiate model
@@ -180,6 +224,15 @@ public class EvalTest {
 
         //Assert the two implementations give same f1 and accuracy (since one batch)
         assertTrue(eval1F1 == eval2F1 && eval1Acc == eval2Acc);
+
+        Evaluation evalViaMethod = model.evaluate(new ListDataSetIterator(Collections.singletonList(test)));
+        checkEvaluationEquality(eval, evalViaMethod);
+
+        System.out.println(eval.getConfusionMatrix().toString());
+        System.out.println(eval.getConfusionMatrix().toCSV());
+        System.out.println(eval.getConfusionMatrix().toHTML());
+
+        System.out.println(eval.confusionToString());
     }
 
     @Test
@@ -227,11 +280,20 @@ public class EvalTest {
 
         assertEquals(evaluation.accuracy(), evaluation2.accuracy(), 1e-12);
         assertEquals(evaluation.f1(), evaluation2.f1(), 1e-12);
-        assertEquals(evaluation.falsePositives(), evaluation2.falsePositives(), 1e-12);
-        assertEquals(evaluation.falseNegatives(),evaluation2.falseNegatives(),1e-12);
-        assertEquals(evaluation.truePositives(),evaluation2.truePositives(),1e-12);
-        assertEquals(evaluation.trueNegatives(), evaluation2.trueNegatives(), 1e-12);
+
+        assertMapEquals(evaluation.falsePositives(), evaluation2.falsePositives());
+        assertMapEquals(evaluation.falseNegatives(), evaluation2.falseNegatives());
+        assertMapEquals(evaluation.truePositives(), evaluation2.truePositives());
+        assertMapEquals(evaluation.trueNegatives(), evaluation2.trueNegatives());
+
         for( int i=0; i<nOut; i++) assertEquals(evaluation.classCount(i),evaluation2.classCount(i));
+    }
+
+    private static void assertMapEquals(Map<Integer,Integer> first, Map<Integer,Integer> second){
+        assertEquals(first.keySet(),second.keySet());
+        for( Integer i : first.keySet()){
+            assertEquals(first.get(i),second.get(i));
+        }
     }
 
     @Test
@@ -324,12 +386,204 @@ public class EvalTest {
         assertEquals(evalExpected.accuracy(), evalActual.accuracy(), 1e-3);
         assertEquals(evalExpected.f1(), evalActual.f1(), 1e-3);
         assertEquals(evalExpected.getNumRowCounter(),evalActual.getNumRowCounter(), 1e-3);
-        assertEquals(evalExpected.falseNegatives(),evalActual.falseNegatives(),1e-3);
-        assertEquals(evalExpected.falsePositives(),evalActual.falsePositives(),1e-3);
-        assertEquals(evalExpected.trueNegatives(),evalActual.trueNegatives(),1e-3);
-        assertEquals(evalExpected.truePositives(),evalActual.truePositives(),1e-3);
+        assertMapEquals(evalExpected.falseNegatives(),evalActual.falseNegatives());
+        assertMapEquals(evalExpected.falsePositives(),evalActual.falsePositives());
+        assertMapEquals(evalExpected.trueNegatives(),evalActual.trueNegatives());
+        assertMapEquals(evalExpected.truePositives(),evalActual.truePositives());
         assertEquals(evalExpected.precision(),evalActual.precision(),1e-3);
         assertEquals(evalExpected.recall(),evalActual.recall(),1e-3);
+        assertEquals(evalExpected.falsePositiveRate(),evalActual.falsePositiveRate(), 1e-3);
+        assertEquals(evalExpected.falseNegativeRate(),evalActual.falseNegativeRate(), 1e-3);
+        assertEquals(evalExpected.falseAlarmRate(),evalActual.falseAlarmRate(), 1e-3);
         assertEquals(evalExpected.getConfusionMatrix(), evalActual.getConfusionMatrix());
+    }
+
+
+    @Test
+    public void testSingleClassBinaryClassification(){
+
+        Evaluation eval = new Evaluation(1);
+
+        INDArray zero = Nd4j.create(1);
+        INDArray one = Nd4j.ones(1);
+
+        //One incorrect, three correct
+        eval.eval(one,zero);
+        eval.eval(one,one);
+        eval.eval(one,one);
+        eval.eval(zero,zero);
+
+        System.out.println(eval.stats());
+
+        assertEquals(0.75, eval.accuracy(), 1e-6);
+        assertEquals(4, eval.getNumRowCounter());
+
+        assertEquals(1, (int)eval.truePositives().get(0));
+        assertEquals(2, (int)eval.truePositives().get(1));
+        assertEquals(1, (int)eval.falseNegatives().get(1));
+    }
+
+    @Test
+    public void testEvalInvalid(){
+        Evaluation e = new Evaluation(5);
+        e.eval(0,1);
+        e.eval(1,0);
+        e.eval(1,1);
+
+        System.out.println(e.stats());
+
+        char c = "\uFFFD".toCharArray()[0];
+        System.out.println(c);
+
+        assertFalse(e.stats().contains("\uFFFD"));
+    }
+
+    @Test
+    public void testEvalMethods(){
+        //Check eval(int,int) vs. eval(INDArray,INDArray)
+
+        Evaluation e1 = new Evaluation(4);
+        Evaluation e2 = new Evaluation(4);
+
+        INDArray i0 = Nd4j.create(new double[]{1,0,0,0});
+        INDArray i1 = Nd4j.create(new double[]{0,1,0,0});
+        INDArray i2 = Nd4j.create(new double[]{0,0,1,0});
+        INDArray i3 = Nd4j.create(new double[]{0,0,0,1});
+
+        e1.eval(i0,i0); //order: actual, predicted
+        e2.eval(0,0);   //order: predicted, actual
+        e1.eval(i0,i2);
+        e2.eval(2,0);
+        e1.eval(i0,i2);
+        e2.eval(2,0);
+        e1.eval(i1,i2);
+        e2.eval(2,1);
+        e1.eval(i3,i3);
+        e2.eval(3,3);
+        e1.eval(i3,i0);
+        e2.eval(0,3);
+        e1.eval(i3,i0);
+        e2.eval(0,3);
+
+        ConfusionMatrix<Integer> cm = e1.getConfusionMatrix();
+        assertEquals(1,cm.getCount(0,0));   //Order: actual, predicted
+        assertEquals(2,cm.getCount(0,2));
+        assertEquals(1,cm.getCount(1,2));
+        assertEquals(1,cm.getCount(3,3));
+        assertEquals(2,cm.getCount(3,0));
+
+        System.out.println(e1.stats());
+        System.out.println(e2.stats());
+
+        assertEquals(e1.stats(),e2.stats());
+    }
+
+
+    @Test
+    public void testTopNAccuracy(){
+
+        Evaluation e = new Evaluation(null,3);
+
+        INDArray i0 = Nd4j.create(new double[]{1,0,0,0,0});
+        INDArray i1 = Nd4j.create(new double[]{0,1,0,0,0});
+
+        INDArray p0_0 = Nd4j.create(new double[]{0.8,0.05,0.05,0.05,0.05});     //class 0: highest prob
+        INDArray p0_1 = Nd4j.create(new double[]{0.4,0.45,0.05,0.05,0.05});     //class 0: 2nd highest prob
+        INDArray p0_2 = Nd4j.create(new double[]{0.1,0.45,0.35,0.05,0.05});     //class 0: 3rd highest prob
+        INDArray p0_3 = Nd4j.create(new double[]{0.1,0.40,0.30,0.15,0.05});     //class 0: 4th highest prob
+
+        INDArray p1_0 = Nd4j.create(new double[]{0.05,0.80,0.05,0.05,0.05});     //class 1: highest prob
+        INDArray p1_1 = Nd4j.create(new double[]{0.45,0.40,0.05,0.05,0.05});     //class 1: 2nd highest prob
+        INDArray p1_2 = Nd4j.create(new double[]{0.35,0.10,0.45,0.05,0.05});     //class 1: 3rd highest prob
+        INDArray p1_3 = Nd4j.create(new double[]{0.40,0.10,0.30,0.15,0.05});     //class 1: 4th highest prob
+
+
+        //                                              Correct     TopNCorrect     Total
+        e.eval(i0, p0_0);                           //  1           1               1
+        assertEquals(1.0, e.accuracy(), 1e-6);
+        assertEquals(1.0, e.topNAccuracy(), 1e-6);
+        assertEquals(1, e.getTopNCorrectCount());
+        assertEquals(1, e.getTopNTotalCount());
+        e.eval(i0, p0_1);                           //  1           2               2
+        assertEquals(0.5, e.accuracy(), 1e-6);
+        assertEquals(1.0, e.topNAccuracy(), 1e-6);
+        assertEquals(2, e.getTopNCorrectCount());
+        assertEquals(2, e.getTopNTotalCount());
+        e.eval(i0, p0_2);                           //  1           3               3
+        assertEquals(1.0/3, e.accuracy(), 1e-6);
+        assertEquals(1.0, e.topNAccuracy(), 1e-6);
+        assertEquals(3, e.getTopNCorrectCount());
+        assertEquals(3, e.getTopNTotalCount());
+        e.eval(i0, p0_3);                           //  1           3               4
+        assertEquals(0.25, e.accuracy(), 1e-6);
+        assertEquals(0.75, e.topNAccuracy(), 1e-6);
+        assertEquals(3, e.getTopNCorrectCount());
+        assertEquals(4, e.getTopNTotalCount());
+
+        e.eval(i1, p1_0);                           //  2           4               5
+        assertEquals(2.0/5, e.accuracy(), 1e-6);
+        assertEquals(4.0/5, e.topNAccuracy(), 1e-6);
+        e.eval(i1, p1_1);                           //  2           5               6
+        assertEquals(2.0/6, e.accuracy(), 1e-6);
+        assertEquals(5.0/6, e.topNAccuracy(), 1e-6);
+        e.eval(i1, p1_2);                           //  2           6               7
+        assertEquals(2.0/7, e.accuracy(), 1e-6);
+        assertEquals(6.0/7, e.topNAccuracy(), 1e-6);
+        e.eval(i1, p1_3);                           //  2           6               8
+        assertEquals(2.0/8, e.accuracy(), 1e-6);
+        assertEquals(6.0/8, e.topNAccuracy(), 1e-6);
+        assertEquals(6, e.getTopNCorrectCount());
+        assertEquals(8, e.getTopNTotalCount());
+
+        System.out.println(e.stats());
+    }
+
+
+    @Test
+    public void testTopNAccuracyMerging(){
+
+        Evaluation e1 = new Evaluation(null,3);
+        Evaluation e2 = new Evaluation(null,3);
+
+        INDArray i0 = Nd4j.create(new double[]{1,0,0,0,0});
+        INDArray i1 = Nd4j.create(new double[]{0,1,0,0,0});
+
+        INDArray p0_0 = Nd4j.create(new double[]{0.8,0.05,0.05,0.05,0.05});     //class 0: highest prob
+        INDArray p0_1 = Nd4j.create(new double[]{0.4,0.45,0.05,0.05,0.05});     //class 0: 2nd highest prob
+        INDArray p0_2 = Nd4j.create(new double[]{0.1,0.45,0.35,0.05,0.05});     //class 0: 3rd highest prob
+        INDArray p0_3 = Nd4j.create(new double[]{0.1,0.40,0.30,0.15,0.05});     //class 0: 4th highest prob
+
+        INDArray p1_0 = Nd4j.create(new double[]{0.05,0.80,0.05,0.05,0.05});     //class 1: highest prob
+        INDArray p1_1 = Nd4j.create(new double[]{0.45,0.40,0.05,0.05,0.05});     //class 1: 2nd highest prob
+        INDArray p1_2 = Nd4j.create(new double[]{0.35,0.10,0.45,0.05,0.05});     //class 1: 3rd highest prob
+        INDArray p1_3 = Nd4j.create(new double[]{0.40,0.10,0.30,0.15,0.05});     //class 1: 4th highest prob
+
+
+        //                                              Correct     TopNCorrect     Total
+        e1.eval(i0, p0_0);                           //  1           1               1
+        e1.eval(i0, p0_1);                           //  1           2               2
+        e1.eval(i0, p0_2);                           //  1           3               3
+        e1.eval(i0, p0_3);                           //  1           3               4
+        assertEquals(0.25, e1.accuracy(), 1e-6);
+        assertEquals(0.75, e1.topNAccuracy(), 1e-6);
+        assertEquals(3, e1.getTopNCorrectCount());
+        assertEquals(4, e1.getTopNTotalCount());
+
+        e2.eval(i1, p1_0);                           //  1           1               1
+        e2.eval(i1, p1_1);                           //  1           2               2
+        e2.eval(i1, p1_2);                           //  1           3               3
+        e2.eval(i1, p1_3);                           //  1           3               4
+        assertEquals(1.0/4, e2.accuracy(), 1e-6);
+        assertEquals(3.0/4, e2.topNAccuracy(), 1e-6);
+        assertEquals(3, e2.getTopNCorrectCount());
+        assertEquals(4, e2.getTopNTotalCount());
+
+        e1.merge(e2);
+
+        assertEquals(8, e1.getNumRowCounter());
+        assertEquals(8, e1.getTopNTotalCount());
+        assertEquals(6, e1.getTopNCorrectCount());
+        assertEquals(2.0/8, e1.accuracy(), 1e-6);
+        assertEquals(6.0/8, e1.topNAccuracy(), 1e-6);
     }
 }

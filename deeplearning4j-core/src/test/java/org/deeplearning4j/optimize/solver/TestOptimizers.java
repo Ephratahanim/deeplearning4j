@@ -1,14 +1,6 @@
 package org.deeplearning4j.optimize.solver;
 
-import static org.junit.Assert.*;
-
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Map;
-
 import org.deeplearning4j.berkeley.Pair;
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
 import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.Model;
@@ -26,9 +18,9 @@ import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.api.ConvexOptimizer;
 import org.deeplearning4j.optimize.api.IterationListener;
 import org.deeplearning4j.optimize.solvers.ConjugateGradient;
+import org.deeplearning4j.optimize.solvers.LBFGS;
 import org.deeplearning4j.optimize.solvers.LineGradientDescent;
 import org.deeplearning4j.optimize.solvers.StochasticGradientDescent;
-import org.deeplearning4j.optimize.solvers.LBFGS;
 import org.deeplearning4j.optimize.stepfunctions.NegativeDefaultStepFunction;
 import org.junit.Test;
 import org.nd4j.linalg.api.complex.IComplexNumber;
@@ -38,9 +30,17 @@ import org.nd4j.linalg.api.ops.impl.transforms.Sin;
 import org.nd4j.linalg.api.rng.DefaultRandom;
 import org.nd4j.linalg.api.rng.Random;
 import org.nd4j.linalg.dataset.DataSet;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.indexing.conditions.Condition;
 import org.nd4j.linalg.lossfunctions.LossFunctions.LossFunction;
+
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Map;
+
+import static org.junit.Assert.assertTrue;
 
 public class TestOptimizers {
 
@@ -119,7 +119,7 @@ public class TestOptimizers {
                 .iterations(nIterations)
                 .learningRate(1e-1)
                 .seed(12345L)
-                .list(2)
+                .list()
                 .layer(0, new DenseLayer.Builder().nIn(4).nOut(3)
                         .weightInit(WeightInit.XAVIER)
                         .updater(Updater.ADAGRAD)
@@ -204,7 +204,7 @@ public class TestOptimizers {
                         .updater(Updater.SGD)
                         .build())
                 .build();
-        conf.addVariable("x");	//Normally done by ParamInitializers, but obviously that isn't done here
+        conf.addVariable("W");	//Normally done by ParamInitializers, but obviously that isn't done here
 
         Random rng = new DefaultRandom(12345L);
         org.nd4j.linalg.api.rng.distribution.Distribution dist
@@ -297,7 +297,7 @@ public class TestOptimizers {
                             .nIn(1).nOut(1)
                             .updater(Updater.SGD)
                             .build()).build();
-            conf.addVariable("x");	//Normally done by ParamInitializers, but obviously that isn't done here
+            conf.addVariable("W");	//Normally done by ParamInitializers, but obviously that isn't done here
 
             Model m = new SphereFunctionModel(100,dist,conf);
             if(i == 0) {
@@ -342,7 +342,7 @@ public class TestOptimizers {
             // Gradients: d(x^2)/dx = 2x
             INDArray gradient = parameters.mul(2);
             Gradient g = new DefaultGradient();
-            g.gradientForVariable().put("x", gradient);
+            g.gradientForVariable().put("W", gradient);
             this.gradient =  g;
             this.score = Nd4j.getBlasWrapper().dot(parameters, parameters);	//sum_i x_i^2
 
@@ -351,6 +351,16 @@ public class TestOptimizers {
         @Override
         public int numParams(boolean backwards) {
             return 0;
+        }
+
+        @Override
+        public void setParamsViewArray(INDArray params) {
+            throw new UnsupportedOperationException("Not supported");
+        }
+
+        @Override
+        public void setBackpropGradientsViewArray(INDArray gradients) {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -413,14 +423,16 @@ public class TestOptimizers {
                             .updater(Updater.ADAGRAD)
                             .build())
                    .build();
-            conf.addVariable("x");	//Normally done by ParamInitializers, but obviously that isn't done here
+            conf.addVariable("W");	//Normally done by ParamInitializers, but obviously that isn't done here
 
             Model m = new RastriginFunctionModel(100,conf);
+            int nParams = m.numParams();
             if(i == 0) {
                 m.computeGradientAndScore();
                 scores[0] = m.score();	//Before optimization
             } else {
                 ConvexOptimizer opt = getOptimizer(oa,conf,m);
+                opt.getUpdater().setStateViewArray((Layer)m,Nd4j.createUninitialized(new int[]{1,nParams},'c'),true);
                 opt.optimize();
                 m.computeGradientAndScore();
                 scores[i] = m.score();
@@ -475,10 +487,20 @@ public class TestOptimizers {
             gradient.addi(parameters.mul(2));
 
             Gradient g = new DefaultGradient();
-            g.gradientForVariable().put("x", gradient);
+            g.gradientForVariable().put("W", gradient);
             this.gradient = g;
             //If any parameters are outside range [-5.12,5.12]: score = infinity
             INDArray paramExceeds512 = parameters.cond(new Condition(){
+                @Override
+                public int condtionNum() {
+                    return 0;
+                }
+
+                @Override
+                public double getValue() {
+                    return 0;
+                }
+
                 @Override
                 public Boolean apply(Number input) {
                     return Math.abs(input.doubleValue()) > 5.12;
@@ -505,6 +527,16 @@ public class TestOptimizers {
         @Override
         public int numParams(boolean backwards) {
             return 0;
+        }
+
+        @Override
+        public void setParamsViewArray(INDArray params) {
+            throw new UnsupportedOperationException("Not supported");
+        }
+
+        @Override
+        public void setBackpropGradientsViewArray(INDArray gradients) {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -562,7 +594,7 @@ public class TestOptimizers {
                             .updater(Updater.SGD)
                             .build())
                     .build();
-            conf.addVariable("x");	//Normally done by ParamInitializers, but obviously that isn't done here
+            conf.addVariable("W");	//Normally done by ParamInitializers, but obviously that isn't done here
 
             Model m = new RosenbrockFunctionModel(100,conf);
             if(i == 0) {
@@ -636,17 +668,27 @@ public class TestOptimizers {
             double gl = 200 * (xl - xlm1 * xlm1);
             gradient.put(0, nDims - 1,gl);
             Gradient g = new DefaultGradient();
-            g.gradientForVariable().put("x", gradient);
+            g.gradientForVariable().put("W", gradient);
             this.gradient = g;
 
             INDArray paramExceeds5 = parameters.cond(new Condition(){
+                @Override
+                public int condtionNum() {
+                    return 0;
+                }
+
+                @Override
+                public double getValue() {
+                    return 0;
+                }
+
                 @Override
                 public Boolean apply(Number input) {
                     return Math.abs(input.doubleValue()) > 5.0;
                 }
 
                 @Override
-                public Boolean apply(IComplexNumber input){ throw new UnsupportedOperationException(); };
+                public Boolean apply(IComplexNumber input){ throw new UnsupportedOperationException(); }
             });
 
             int nExceeds5 = paramExceeds5.sum(Integer.MAX_VALUE).getInt(0);
@@ -670,6 +712,16 @@ public class TestOptimizers {
         @Override
         public int numParams(boolean backwards) {
             return 0;
+        }
+
+        @Override
+        public void setParamsViewArray(INDArray params) {
+            throw new UnsupportedOperationException("Not supported");
+        }
+
+        @Override
+        public void setBackpropGradientsViewArray(INDArray gradients) {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -743,7 +795,7 @@ public class TestOptimizers {
 
         @Override
         public void update(INDArray gradient, String paramType) {
-            if(!"x".equals(paramType)) throw new UnsupportedOperationException();
+            if(!"W".equals(paramType)) throw new UnsupportedOperationException();
             parameters.subi(gradient);
         }
 
@@ -851,7 +903,7 @@ public class TestOptimizers {
 
         @Override
         public Map<String, INDArray> paramTable() {
-            return Collections.singletonMap("x", getParam("x"));
+            return Collections.singletonMap("W", getParam("W"));
         }
 
         @Override

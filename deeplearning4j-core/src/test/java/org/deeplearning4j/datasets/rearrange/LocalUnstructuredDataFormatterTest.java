@@ -7,7 +7,7 @@ import org.junit.Test;
 import java.io.File;
 import java.util.Iterator;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
 
 
 /**
@@ -18,7 +18,7 @@ public class LocalUnstructuredDataFormatterTest {
     @Test
     public void testRearrange() throws Exception {
         //ensure exists
-        new LFWDataSetIterator(10,28,28).next();
+        new LFWDataSetIterator(new int[] {28,28,3}).next();
         File destinationDir = new File(System.getProperty("user.home"),"rearrangedlfw");
         if(destinationDir.exists())
             FileUtils.deleteDirectory(destinationDir);

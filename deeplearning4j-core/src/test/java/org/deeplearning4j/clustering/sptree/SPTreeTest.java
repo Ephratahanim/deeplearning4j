@@ -18,17 +18,25 @@
 
 package org.deeplearning4j.clustering.sptree;
 
-import static org.junit.Assert.*;
-import static org.junit.Assume.*;
-
+import org.junit.Before;
 import org.junit.Test;
+import org.nd4j.linalg.api.buffer.DataBuffer;
+import org.nd4j.linalg.api.buffer.util.DataTypeUtil;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.factory.Nd4j;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 /**
  * @author Adam Gibson
  */
 public class SPTreeTest {
+
+    @Before
+    public void setUp() {
+        DataTypeUtil.setDTypeForContext(DataBuffer.Type.DOUBLE);
+    }
 
     @Test
     public void testStructure() {

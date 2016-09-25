@@ -21,10 +21,8 @@ package org.deeplearning4j.spark.impl.layer;
 import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.broadcast.Broadcast;
 import org.deeplearning4j.nn.api.Layer;
-import org.deeplearning4j.nn.api.LayerFactory;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.layers.OutputLayer;
-import org.deeplearning4j.nn.layers.factory.LayerFactories;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.factory.Nd4j;
@@ -74,9 +72,11 @@ public class IterativeReduceFlatMap implements FlatMapFunction<Iterator<DataSet>
         DataSet data = DataSet.merge(collect,false);
         log.debug("Training on " + data.labelCounts());
         NeuralNetConfiguration conf = NeuralNetConfiguration.fromJson(json);
-        LayerFactory layerFactory = LayerFactories.getFactory(conf.getLayer());
-        Layer network = layerFactory.create(conf);
-        INDArray val = params.value();
+        int numParams = conf.getLayer().initializer().numParams(conf,true);
+        INDArray thisParams = Nd4j.create(1, numParams);
+        Layer network = conf.getLayer().instantiate(conf, null, 0, thisParams, true);
+        network.setBackpropGradientsViewArray(Nd4j.create(1,numParams));
+        INDArray val = params.value().unsafeDuplication();
         if(val.length() != network.numParams())
             throw new IllegalStateException("Network did not have same number of parameters as the broadcasted set parameters");
         network.setParams(val);

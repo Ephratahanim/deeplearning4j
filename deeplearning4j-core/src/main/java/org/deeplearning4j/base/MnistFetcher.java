@@ -18,20 +18,18 @@
 
 package org.deeplearning4j.base;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.URL;
-import java.util.HashMap;
-import java.util.Map;
-
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.apache.commons.io.FileUtils;
 import org.deeplearning4j.util.ArchiveUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.URL;
 @Data
 @NoArgsConstructor
 public class MnistFetcher {
@@ -40,7 +38,6 @@ public class MnistFetcher {
 	protected File BASE_DIR = new File(System.getProperty("user.home"));
 	protected static final String LOCAL_DIR_NAME = "MNIST";
 	protected File FILE_DIR = new File(BASE_DIR, LOCAL_DIR_NAME);
-
 
 	private File fileDir;
 	private static final String trainingFilesURL = "http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz";
@@ -63,15 +60,11 @@ public class MnistFetcher {
 		if (fileDir != null) {
 			return fileDir;
 		}
-		// mac gives unique tmp each run and we want to store this persist
-		// this data across restarts
-		File tmpDir = new File(System.getProperty("user.home"));
 
-		File baseDir = new File(tmpDir, LOCAL_DIR_NAME);
+		File baseDir = FILE_DIR;
 		if (!(baseDir.isDirectory() || baseDir.mkdir())) {
 			throw new IOException("Could not mkdir " + baseDir);
 		}
-
 
 		log.info("Downloading mnist...");
 		// getFromOrigin training records

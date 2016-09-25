@@ -1,25 +1,20 @@
 package org.deeplearning4j.nn.layers.feedforward.dense;
 
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
 import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
-import org.deeplearning4j.nn.api.*;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
-import org.deeplearning4j.nn.conf.layers.*;
 import org.deeplearning4j.nn.conf.layers.DenseLayer;
-import org.deeplearning4j.nn.layers.factory.LayerFactories;
+import org.deeplearning4j.nn.conf.layers.OutputLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
-import org.deeplearning4j.optimize.api.IterationListener;
-import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
 import org.junit.Test;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
+import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
-
-import java.util.Arrays;
 
 import static org.junit.Assert.assertEquals;
 
@@ -45,7 +40,9 @@ public class DenseTest {
                 .layer(build)
                 .build();
 
-        Layer layer =  LayerFactories.getFactory(conf).create(conf);
+        int numParams = conf.getLayer().initializer().numParams(conf,true);
+        INDArray params = Nd4j.create(1, numParams);
+        Layer layer =  conf.getLayer().instantiate(conf, null, 0, params, true);
 
         assertEquals(1, layer.getParam("b").size(0));
     }
@@ -120,7 +117,7 @@ public class DenseTest {
                 .learningRate(1e-3)
                 .l1(0.3)
                 .regularization(true).l2(1e-3)
-                .list(3)
+                .list()
                 .layer(0, new org.deeplearning4j.nn.conf.layers.DenseLayer.Builder()
                         .nIn(numInputs)
                         .nOut(3)

@@ -18,7 +18,6 @@
 
 package org.deeplearning4j.spark.util;
 
-import org.apache.spark.RangePartitioner;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -32,9 +31,9 @@ import org.apache.spark.mllib.linalg.Matrix;
 import org.apache.spark.mllib.linalg.Vector;
 import org.apache.spark.mllib.linalg.Vectors;
 import org.apache.spark.mllib.regression.LabeledPoint;
-import org.canova.api.records.reader.RecordReader;
-import org.canova.api.split.InputStreamInputSplit;
-import org.canova.api.writable.Writable;
+import org.datavec.api.records.reader.RecordReader;
+import org.datavec.api.split.InputStreamInputSplit;
+import org.datavec.api.writable.Writable;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.factory.Nd4j;
@@ -53,6 +52,9 @@ import java.util.List;
  */
 public class MLLibUtil {
 
+
+    private MLLibUtil() {
+    }
 
     /**
      * This is for the edge case where

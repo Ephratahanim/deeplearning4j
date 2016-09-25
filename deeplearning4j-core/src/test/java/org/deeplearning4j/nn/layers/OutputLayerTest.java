@@ -18,10 +18,6 @@
 
 package org.deeplearning4j.nn.layers;
 
-import java.util.Arrays;
-import java.util.Random;
-
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
 import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
@@ -32,7 +28,6 @@ import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
 import org.deeplearning4j.nn.conf.layers.GravesLSTM;
 import org.deeplearning4j.nn.conf.preprocessor.FeedForwardToRnnPreProcessor;
 import org.deeplearning4j.nn.conf.preprocessor.RnnToFeedForwardPreProcessor;
-import org.deeplearning4j.nn.layers.factory.LayerFactories;
 import org.deeplearning4j.nn.layers.recurrent.RnnOutputLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
@@ -43,11 +38,16 @@ import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.SplitTestAndTrain;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.nd4j.linalg.lossfunctions.LossFunctions.LossFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Random;
 
 import static org.junit.Assert.*;
 
@@ -71,7 +71,10 @@ public class OutputLayerTest {
                         .lossFunction(LossFunctions.LossFunction.MCXENT).build())
                 .build();
 
-        OutputLayer l = LayerFactories.getFactory(conf.getLayer()).create(conf, Arrays.<IterationListener>asList(new ScoreIterationListener(1)),0);
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+        OutputLayer l = (OutputLayer)conf.getLayer().instantiate(conf, Collections.<IterationListener>singletonList(new ScoreIterationListener(1)),0,params, true);
+		l.setBackpropGradientsViewArray(Nd4j.create(1, params.length()));
         DataSetIterator iter = new IrisDataSetIterator(150, 150);
 
 
@@ -102,7 +105,12 @@ public class OutputLayerTest {
                         .nIn(4).nOut(3)
                         .activation("softmax")
                         .weightInit(WeightInit.XAVIER).build()).build();
-        org.deeplearning4j.nn.layers.OutputLayer layer = LayerFactories.getFactory(conf).create(conf);
+
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+        org.deeplearning4j.nn.layers.OutputLayer layer = (org.deeplearning4j.nn.layers.OutputLayer)conf.getLayer().instantiate(conf,null,0,params,true);
+		layer.setBackpropGradientsViewArray(Nd4j.create(1, params.length()));
+
         DataSet next = iter.next();
         next.normalizeZeroMeanZeroUnitVariance();
         layer.setListeners(new ScoreIterationListener(1));
@@ -117,9 +125,9 @@ public class OutputLayerTest {
         Nd4j.MAX_ELEMENTS_PER_SLICE = Integer.MAX_VALUE;
         Nd4j.MAX_SLICES_TO_PRINT = Integer.MAX_VALUE;
 
-        NeuralNetConfiguration neuralNetConfiguration = new NeuralNetConfiguration.Builder()
+        NeuralNetConfiguration conf = new NeuralNetConfiguration.Builder()
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
-                .constrainGradientToUnitNorm(true).miniBatch(false)
+                .miniBatch(false)
                 .seed(123)
                 .iterations(1000)
                 .learningRate(1e-1)
@@ -131,7 +139,11 @@ public class OutputLayerTest {
                         .activation("softmax").build())
                 .build();
 
-        OutputLayer o = LayerFactories.getFactory(neuralNetConfiguration).create(neuralNetConfiguration);
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+        OutputLayer o = (OutputLayer)conf.getLayer().instantiate(conf,null,0,params,true);
+		o.setBackpropGradientsViewArray(Nd4j.create(1, params.length()));
+
 
         int numSamples = 150;
         int batchSize = 150;
@@ -174,7 +186,7 @@ public class OutputLayerTest {
                         {0, 1}});
 
         DataSet dataset = new DataSet(data,data2);
-        NeuralNetConfiguration neuralNetConfiguration = new NeuralNetConfiguration.Builder()
+        NeuralNetConfiguration conf = new NeuralNetConfiguration.Builder()
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
                 .seed(123)
                 .iterations(200)
@@ -188,7 +200,11 @@ public class OutputLayerTest {
                         .build())
                 .build();
 
-        OutputLayer o = LayerFactories.getFactory(neuralNetConfiguration).create(neuralNetConfiguration);
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+        OutputLayer o = (OutputLayer)conf.getLayer().instantiate(conf, null, 0, params,true);
+		o.setBackpropGradientsViewArray(Nd4j.create(1,params.length()));
+
         o.setListeners(new ScoreIterationListener(1));
         o.fit(dataset);
 
@@ -209,7 +225,10 @@ public class OutputLayerTest {
                         .lossFunction(LossFunctions.LossFunction.MCXENT).build())
                 .build();
 
-        OutputLayer l = LayerFactories.getFactory(conf.getLayer()).create(conf, Arrays.<IterationListener>asList(new ScoreIterationListener(1)),0);
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+        OutputLayer l = (OutputLayer)conf.getLayer().instantiate(conf, Collections.<IterationListener>singletonList(new ScoreIterationListener(1)),0,params,true);
+		l.setBackpropGradientsViewArray(Nd4j.create(1, params.length()));
         DataSetIterator iter = new IrisDataSetIterator(150, 150);
 
 
@@ -243,8 +262,10 @@ public class OutputLayerTest {
                         .lossFunction(LossFunctions.LossFunction.MCXENT).build())
                 .build();
 
-        OutputLayer l = LayerFactories.getFactory(conf.getLayer()).create(conf, Arrays.<IterationListener>asList(new ScoreIterationListener(1)),0);
-        INDArray params = l.params();
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+        OutputLayer l = (OutputLayer)conf.getLayer().instantiate(conf, Collections.<IterationListener>singletonList(new ScoreIterationListener(1)),0,params,true);
+        params = l.params();
         l.setParams(params);
         assertEquals(params,l.params());
     }
@@ -271,7 +292,7 @@ public class OutputLayerTest {
 
 		MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
 	        .seed(12345L)
-	        .list(2)
+	        .list()
 	        .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(layerSize)
 	        		.weightInit(WeightInit.DISTRIBUTION).dist(new NormalDistribution(0,1))
 	        		.activation("tanh").updater(Updater.NONE).build())
@@ -301,7 +322,7 @@ public class OutputLayerTest {
 
 		MultiLayerConfiguration confRnn = new NeuralNetConfiguration.Builder()
 	        .seed(12345L)
-	        .list(2)
+	        .list()
 	        .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(layerSize)
 	        		.weightInit(WeightInit.DISTRIBUTION).dist(new NormalDistribution(0,1))
 	        		.activation("tanh").updater(Updater.NONE).build())
@@ -363,7 +384,7 @@ public class OutputLayerTest {
 
     		MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
     	        .seed(12345L)
-    	        .list(2)
+    	        .list()
     	        .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(layerSize)
     	        		.weightInit(WeightInit.DISTRIBUTION).dist(new NormalDistribution(0,1))
     	        		.activation("tanh").updater(Updater.NONE).build())
@@ -383,7 +404,7 @@ public class OutputLayerTest {
 
     		MultiLayerConfiguration confRnn = new NeuralNetConfiguration.Builder()
     	        .seed(12345L)
-    	        .list(2)
+    	        .list()
     	        .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(layerSize)
     	        		.weightInit(WeightInit.DISTRIBUTION).dist(new NormalDistribution(0,1))
     	        		.activation("tanh").updater(Updater.NONE).build())

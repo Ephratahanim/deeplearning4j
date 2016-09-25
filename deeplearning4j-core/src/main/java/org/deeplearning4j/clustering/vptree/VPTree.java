@@ -38,6 +38,7 @@ import java.util.List;
  */
 public class VPTree {
 
+    public static final String EUCLIDEAN = "euclidean";
     private List<DataPoint> items;
     private double tau;
     private Node root;
@@ -58,9 +59,11 @@ public class VPTree {
         for(int i = 0; i < items.slices(); i++)
             thisItems.add(new DataPoint(i,items.slice(i),this.similarityFunction,invert));
         this.items = thisItems;
+        final int deviceId = Nd4j.getAffinityManager().getDeviceForCurrentThread();
         distances = CounterMap.runPairWise(thisItems, new CounterMap.CountFunction<DataPoint>() {
             @Override
             public double count(DataPoint v1, DataPoint v2) {
+                Nd4j.getAffinityManager().attachThreadToDevice(Thread.currentThread(), deviceId);
                 return v1.distance(v2);
             }
         });
@@ -114,16 +117,16 @@ public class VPTree {
 
 
     public VPTree(INDArray items) {
-        this(items,"euclidean");
+        this(items, EUCLIDEAN);
     }
 
     public VPTree(List<DataPoint> items,CounterMap<DataPoint,DataPoint> distances) {
-        this(items,distances,"euclidean");
+        this(items,distances, EUCLIDEAN);
 
     }
 
     public VPTree(List<DataPoint> items) {
-        this(items,"euclidean");
+        this(items, EUCLIDEAN);
     }
 
     public static INDArray buildFromData(List<DataPoint> data) {

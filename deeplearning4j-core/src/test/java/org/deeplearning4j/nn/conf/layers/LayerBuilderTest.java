@@ -5,18 +5,17 @@ import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.Updater;
 import org.deeplearning4j.nn.conf.distribution.Distribution;
 import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
-import org.deeplearning4j.nn.conf.layers.*;
-import org.deeplearning4j.nn.conf.layers.OutputLayer;
-import org.deeplearning4j.nn.conf.layers.RBM.*;
+import org.deeplearning4j.nn.conf.layers.RBM.HiddenUnit;
+import org.deeplearning4j.nn.conf.layers.RBM.VisibleUnit;
 import org.deeplearning4j.nn.conf.layers.SubsamplingLayer.PoolingType;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.junit.Test;
-import static org.junit.Assert.*;
-
 import org.nd4j.linalg.convolution.Convolution;
 import org.nd4j.linalg.lossfunctions.LossFunctions.LossFunction;
 
 import java.io.*;
+
+import static org.junit.Assert.*;
 
 /**
  * @author Jeffrey Tang.
@@ -49,7 +48,7 @@ public class LayerBuilderTest {
 
     @Test
     public void testLayer() throws Exception {
-        RecursiveAutoEncoder layer = new RecursiveAutoEncoder.Builder()
+        DenseLayer layer = new DenseLayer.Builder()
             .activation(act).weightInit(weight).dist(dist).dropOut(dropOut).updater(updater)
             .gradientNormalization(gradNorm).gradientNormalizationThreshold(gradNormThreshold)
             .build();
@@ -67,7 +66,7 @@ public class LayerBuilderTest {
 
     @Test
     public void testFeedForwardLayer() throws Exception {
-        RecursiveAutoEncoder ff = new RecursiveAutoEncoder.Builder().nIn(numIn).nOut(numOut).build();
+        DenseLayer ff = new DenseLayer.Builder().nIn(numIn).nOut(numOut).build();
 
         checkSerialization(ff);
 
@@ -152,7 +151,7 @@ public class LayerBuilderTest {
     	checkSerialization(glstm);
 
         assertEquals(glstm.getForgetGateBiasInit(),1.5,0.0);
-    	assertEquals(glstm.nIn,numIn);
+    	assertEquals(glstm.nIn, numIn);
     	assertEquals(glstm.nOut,numOut);
     	assertEquals(glstm.activationFunction,"tanh");
     }
@@ -171,17 +170,42 @@ public class LayerBuilderTest {
         assertEquals(glstm.nOut,numOut);
         assertEquals(glstm.activationFunction,"tanh");
     }
-    
+
     @Test
-    public void testGRU() throws Exception {
-    	GRU gru = new GRU.Builder().activation("tanh")
-    			.nIn(numIn).nOut(numOut).build();
-    	
-    	checkSerialization(gru);
-    	
-    	assertEquals(gru.nIn,numIn);
-    	assertEquals(gru.nOut,numOut);
-    	assertEquals(gru.activationFunction,"tanh");
+    public void testEmbeddingLayer() throws Exception {
+        EmbeddingLayer el = new EmbeddingLayer.Builder().nIn(10).nOut(5).build();
+        checkSerialization(el);
+
+        assertEquals(10,el.getNIn());
+        assertEquals(5,el.getNOut());
+    }
+
+    @Test
+    public void testBatchNormLayer() throws Exception {
+        BatchNormalization bN = new BatchNormalization.Builder()
+                .nIn(numIn).nOut(numOut)
+                .gamma(2).beta(1).decay(0.5).lockGammaBeta(true).build();
+
+        checkSerialization(bN);
+
+        assertEquals(numIn, bN.nIn);
+        assertEquals(numOut, bN.nOut);
+        assertEquals(true, bN.isLockGammaBeta());
+        assertEquals(0.5, bN.decay, 1e-4);
+        assertEquals(2, bN.gamma, 1e-4);
+        assertEquals(1, bN.beta, 1e-4);
+    }
+
+    @Test
+    public void testActivationLayer() throws Exception {
+        ActivationLayer activationLayer = new ActivationLayer.Builder()
+                .nIn(numIn).nOut(numOut).activation(act).build();
+
+        checkSerialization(activationLayer);
+
+        assertEquals(numIn, activationLayer.nIn);
+        assertEquals(numOut, activationLayer.nOut);
+        assertEquals(act, activationLayer.activationFunction);
     }
 
     private void checkSerialization(Layer layer) throws Exception {
@@ -217,4 +241,5 @@ public class LayerBuilderTest {
         confActual.getLayer().setDropOut(new java.util.Random().nextDouble());
         assertNotEquals("broken equals method (missing callSuper?)", confExpected.getLayer(), confActual.getLayer());
     }
+
 }

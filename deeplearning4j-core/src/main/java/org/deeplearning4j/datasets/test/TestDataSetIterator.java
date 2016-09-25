@@ -18,9 +18,10 @@
 
 package org.deeplearning4j.datasets.test;
 
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
-import org.deeplearning4j.datasets.iterator.DataSetPreProcessor;
+import lombok.Getter;
 import org.nd4j.linalg.dataset.DataSet;
+import org.nd4j.linalg.dataset.api.DataSetPreProcessor;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 
 import java.util.List;
 
@@ -36,7 +37,7 @@ public class TestDataSetIterator implements DataSetIterator {
 	private static final long serialVersionUID = -3042802726018263331L;
 	private DataSetIterator wrapped;
 	private int numDataSets = 0;
-    private DataSetPreProcessor preProcessor;
+    @Getter private DataSetPreProcessor preProcessor;
 	
 	
 	public TestDataSetIterator(DataSetIterator wrapped) {
@@ -76,6 +77,16 @@ public class TestDataSetIterator implements DataSetIterator {
 	@Override
 	public int totalOutcomes() {
 		return wrapped.totalOutcomes();
+	}
+
+	@Override
+	public boolean resetSupported(){
+		return wrapped.resetSupported();
+	}
+
+	@Override
+	public boolean asyncSupported() {
+		return wrapped.asyncSupported();
 	}
 
 	@Override

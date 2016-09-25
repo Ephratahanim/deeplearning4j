@@ -5,7 +5,6 @@ import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
-import org.deeplearning4j.nn.layers.factory.LayerFactories;
 import org.deeplearning4j.nn.params.DefaultParamInitializer;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.api.IterationListener;
@@ -20,9 +19,6 @@ import org.nd4j.linalg.lossfunctions.LossFunctions;
 import java.io.File;
 import java.util.Arrays;
 import java.util.Collection;
-
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
 
 /**
  * @author Adam Gibson
@@ -65,7 +61,9 @@ public class RenderTest {
 
         INDArray input = d2.getFeatureMatrix();
         Collection<IterationListener> listeners = Arrays.asList(new ScoreIterationListener(1),listener);
-        Layer da = LayerFactories.getFactory(conf.getLayer()).create(conf, listeners,0);
+        int numParams = conf.getLayer().initializer().numParams(conf,true);
+        INDArray params = Nd4j.create(1, numParams);
+        Layer da = conf.getLayer().instantiate(conf, listeners,0, params, true);
         da.fit(input);
 
 

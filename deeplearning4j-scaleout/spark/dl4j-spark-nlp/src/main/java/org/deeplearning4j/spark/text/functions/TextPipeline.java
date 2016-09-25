@@ -24,12 +24,12 @@ import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
 import org.deeplearning4j.berkeley.Counter;
 import org.deeplearning4j.berkeley.Pair;
+import org.deeplearning4j.models.embeddings.loader.VectorsConfiguration;
 import org.deeplearning4j.models.word2vec.Huffman;
 import org.deeplearning4j.models.word2vec.VocabWord;
 import org.deeplearning4j.models.word2vec.wordstore.VocabCache;
-import org.deeplearning4j.models.word2vec.wordstore.inmemory.InMemoryLookupCache;
+import org.deeplearning4j.models.word2vec.wordstore.inmemory.AbstractCache;
 import org.deeplearning4j.spark.text.accumulators.WordFreqAccumulator;
-import org.deeplearning4j.text.stopwords.StopWords;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -57,11 +57,13 @@ public class TextPipeline {
     private Broadcast<List<String>> stopWordBroadCast;
     // Return values
     private JavaRDD<Pair<List<String>, AtomicLong>> sentenceWordsCountRDD;
-    private VocabCache<VocabWord> vocabCache = new InMemoryLookupCache();
+    private VocabCache<VocabWord> vocabCache = new AbstractCache<>();
     private Broadcast<VocabCache<VocabWord>> vocabCacheBroadcast;
     private JavaRDD<List<VocabWord>> vocabWordListRDD;
     private JavaRDD<AtomicLong> sentenceCountRDD;
     private long totalWordCount;
+    private boolean useUnk;
+    private VectorsConfiguration configuration;
 
     // Empty Constructor
     public TextPipeline() {}
@@ -83,10 +85,12 @@ public class TextPipeline {
         this.nGrams = (int) tokenizerVarMap.get("nGrams");
         this.tokenizer = (String) tokenizerVarMap.get("tokenizer");
         this.tokenizerPreprocessor = (String) tokenizerVarMap.get("tokenPreprocessor");
+        this.useUnk = (boolean) tokenizerVarMap.get("useUnk");
+        this.configuration = (VectorsConfiguration) tokenizerVarMap.get("vectorsConfiguration");
         // Remove Stop words
-        if ((boolean) tokenizerVarMap.get("removeStop")) {
-            stopWords = StopWords.getStopWords();
-        }
+       // if ((boolean) tokenizerVarMap.get("removeStop")) {
+            stopWords = (List<String>) tokenizerVarMap.get("stopWords");
+    //    }
     }
 
     private void setup() {
@@ -115,7 +119,7 @@ public class TextPipeline {
     }
 
     private String filterMinWord(String stringToken, double tokenCount) {
-        return (tokenCount < numWords) ? org.deeplearning4j.models.word2vec.Word2Vec.UNK : stringToken;
+        return (tokenCount < numWords) ? configuration.getUNK() : stringToken;
     }
 
     private void addTokenToVocabCache(String stringToken, Double tokenCount) {
@@ -132,9 +136,9 @@ public class TextPipeline {
         // Put vocabWord into vocabs in InMemoryVocabCache
         boolean vocabContainsWord = vocabCache.containsWord(stringToken);
         if (!vocabContainsWord) {
-            vocabCache.addToken(actualToken);
-
             int idx = vocabCache.numWords();
+
+            vocabCache.addToken(actualToken);
             actualToken.setIndex(idx);
             vocabCache.putVocabWord(stringToken);
         }
@@ -142,7 +146,7 @@ public class TextPipeline {
 
     public void filterMinWordAddVocab(Counter<String> wordFreq) {
 
-        if (wordFreq.size() == 0) {
+        if (wordFreq.isEmpty()) {
             throw new IllegalStateException("IllegalStateException: wordFreqCounter has nothing. Check accumulator updating");
         }
 
@@ -152,9 +156,9 @@ public class TextPipeline {
 
             // Turn words below min count to UNK
             stringToken = filterMinWord(stringToken, tokenCount);
-
-            // Turn tokens to vocab and add to vocab cache
-            addTokenToVocabCache(stringToken, tokenCount);
+            if (!useUnk && stringToken.equals("UNK")) {
+                // Turn tokens to vocab and add to vocab cache
+            } else addTokenToVocabCache(stringToken, tokenCount);
         }
     }
 
@@ -195,7 +199,6 @@ public class TextPipeline {
         vocabWordListRDD.count();
         totalWordCount = sentenceCountRDD.reduce(new ReduceSentenceCount()).get();
 
-        System.out.println("RDD: " + vocabWordListRDD.first());
         // Release sentenceWordsCountRDD from cache
         sentenceWordsCountRDD.unpersist();
     }

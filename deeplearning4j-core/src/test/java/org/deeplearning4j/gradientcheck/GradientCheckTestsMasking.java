@@ -10,8 +10,8 @@ import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.junit.Test;
 import org.nd4j.linalg.api.buffer.DataBuffer;
+import org.nd4j.linalg.api.buffer.util.DataTypeUtil;
 import org.nd4j.linalg.api.ndarray.INDArray;
-import org.nd4j.linalg.factory.NDArrayFactory;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
 
@@ -27,11 +27,12 @@ public class GradientCheckTestsMasking {
     private static final boolean RETURN_ON_FIRST_FAILURE = false;
     private static final double DEFAULT_EPS = 1e-6;
     private static final double DEFAULT_MAX_REL_ERROR = 1e-3;
+    private static final double DEFAULT_MIN_ABS_ERROR = 1e-10;
 
     static {
-        Nd4j.dtype = DataBuffer.Type.DOUBLE;
-        NDArrayFactory factory = Nd4j.factory();
-        factory.setDType(DataBuffer.Type.DOUBLE);
+        //Force Nd4j initialization, then set data type to double:
+        Nd4j.zeros(1);
+        DataTypeUtil.setDTypeForContext(DataBuffer.Type.DOUBLE);
     }
 
     @Test
@@ -79,7 +80,7 @@ public class GradientCheckTestsMasking {
             MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
                     .regularization(false)
                     .seed(12345L)
-                    .list(2)
+                    .list()
                     .layer(0, new GravesLSTM.Builder().nIn(nIn).nOut(layerSize).weightInit(WeightInit.DISTRIBUTION)
                             .dist(new NormalDistribution(0, 1)).updater(Updater.NONE).build())
                     .layer(1, new RnnOutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax").nIn(layerSize).nOut(nOut)
@@ -91,8 +92,8 @@ public class GradientCheckTestsMasking {
 
             mln.setLayerMaskArrays(null,maskArr);
 
-            boolean gradOK = GradientCheckUtil.checkGradients(mln, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR,
-                    PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels, true);
+            boolean gradOK = GradientCheckUtil.checkGradients(mln, DEFAULT_EPS, DEFAULT_MAX_REL_ERROR, DEFAULT_MIN_ABS_ERROR,
+                    PRINT_RESULTS, RETURN_ON_FIRST_FAILURE, input, labels);
 
             String msg = "gradientCheckMaskingOutputSimple() - timeSeriesLength=" + timeSeriesLength + ", miniBatchSize=" + 1;
             assertTrue(msg, gradOK);

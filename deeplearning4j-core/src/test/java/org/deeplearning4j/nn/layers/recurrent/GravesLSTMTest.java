@@ -1,22 +1,12 @@
 package org.deeplearning4j.nn.layers.recurrent;
 
-import static org.junit.Assert.*;
-
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.Arrays;
-import java.util.List;
-
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.Updater;
 import org.deeplearning4j.nn.conf.distribution.UniformDistribution;
-import org.deeplearning4j.nn.conf.layers.*;
 import org.deeplearning4j.nn.gradient.Gradient;
-import org.deeplearning4j.nn.layers.factory.LayerFactories;
-import org.deeplearning4j.nn.layers.recurrent.GravesLSTM;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.params.GravesLSTMParamInitializer;
 import org.deeplearning4j.nn.weights.WeightInit;
@@ -26,6 +16,13 @@ import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.indexing.INDArrayIndex;
 import org.nd4j.linalg.indexing.NDArrayIndex;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.junit.Assert.*;
 
 
 public class GravesLSTMTest {
@@ -45,8 +42,10 @@ public class GravesLSTMTest {
 						.activation("tanh")
 						.build())
 				.build();
-	
-		GravesLSTM layer = LayerFactories.getFactory(conf.getLayer()).create(conf);
+
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+		GravesLSTM layer = (GravesLSTM)conf.getLayer().instantiate(conf,null,0,params,true);
 		
 		//Data: has shape [miniBatchSize,nIn,timeSeriesLength];
 		//Output/activations has shape [miniBatchsize,nHiddenUnits,timeSeriesLength];
@@ -91,8 +90,11 @@ public class GravesLSTMTest {
 						.activation("tanh")
 						.build())
 				.build();
-		
-		GravesLSTM lstm = LayerFactories.getFactory(conf.getLayer()).create(conf);
+
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+		GravesLSTM lstm = (GravesLSTM)conf.getLayer().instantiate(conf,null,0,params,true);
+		lstm.setBackpropGradientsViewArray(Nd4j.create(1, conf.getLayer().initializer().numParams(conf,true)));
 		//Set input, do a forward pass:
 		lstm.activate(inputData);
 		assertNotNull(lstm.input());
@@ -142,7 +144,9 @@ public class GravesLSTMTest {
 				.build())
 		.build();
 
-		GravesLSTM lstm = LayerFactories.getFactory(conf.getLayer()).create(conf);
+		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		INDArray params = Nd4j.create(1, numParams);
+		GravesLSTM lstm = (GravesLSTM)conf.getLayer().instantiate(conf,null,0,params,true);
 		INDArray input = Nd4j.rand(new int[]{miniBatchSize, nIn, timeSeriesLength});
 		lstm.setInput(input);
 
@@ -180,7 +184,7 @@ public class GravesLSTMTest {
 				.updater(Updater.SGD)
 				.learningRate(0.1)
 				.seed(12345)
-				.list(2)
+				.list()
 				.layer(0, new org.deeplearning4j.nn.conf.layers.GravesLSTM.Builder().activation("tanh").nIn(2).nOut(2).build())
 				.layer(1, new org.deeplearning4j.nn.conf.layers.RnnOutputLayer.Builder().lossFunction(LossFunctions.LossFunction.MSE).nIn(2).nOut(1).activation("tanh").build())
 				.build();

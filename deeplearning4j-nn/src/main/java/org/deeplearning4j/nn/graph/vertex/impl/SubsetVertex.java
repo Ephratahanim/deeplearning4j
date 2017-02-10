@@ -20,6 +20,7 @@ package org.deeplearning4j.nn.graph.vertex.impl;
 
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.api.MaskState;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.graph.ComputationGraph;
 import org.deeplearning4j.nn.graph.vertex.BaseGraphVertex;
@@ -95,13 +96,13 @@ public class SubsetVertex extends BaseGraphVertex {
         INDArray out = Nd4j.zeros(forwardShape);
         switch (forwardShape.length) {
             case 2:
-                out.put(new INDArrayIndex[]{NDArrayIndex.all(), NDArrayIndex.interval(from, to, true)}, epsilons[0]);
+                out.put(new INDArrayIndex[]{NDArrayIndex.all(), NDArrayIndex.interval(from, to, true)}, epsilon);
                 break;
             case 3:
-                out.put(new INDArrayIndex[]{NDArrayIndex.all(), NDArrayIndex.interval(from, to, true), NDArrayIndex.all()}, epsilons[0]);
+                out.put(new INDArrayIndex[]{NDArrayIndex.all(), NDArrayIndex.interval(from, to, true), NDArrayIndex.all()}, epsilon);
                 break;
             case 4:
-                out.put(new INDArrayIndex[]{NDArrayIndex.all(), NDArrayIndex.interval(from, to, true), NDArrayIndex.all(), NDArrayIndex.all()}, epsilons[0]);
+                out.put(new INDArrayIndex[]{NDArrayIndex.all(), NDArrayIndex.interval(from, to, true), NDArrayIndex.all(), NDArrayIndex.all()}, epsilon);
                 break;
             default:
                 throw new RuntimeException("Invalid activation rank");  //Should never happen
@@ -117,5 +118,15 @@ public class SubsetVertex extends BaseGraphVertex {
     @Override
     public void setBackpropGradientsViewArray(INDArray backpropGradientsViewArray) {
         if(backpropGradientsViewArray != null) throw new RuntimeException("Vertex does not have gradients; gradients view array cannot be set here");
+    }
+
+    @Override
+    public Pair<INDArray, MaskState> feedForwardMaskArrays(INDArray[] maskArrays, MaskState currentMaskState, int minibatchSize) {
+        //No op: subset just provides part of the activations for each example (or time step)
+        if(maskArrays == null || maskArrays.length == 0){
+            return null;
+        }
+
+        return new Pair<>(maskArrays[0], currentMaskState);
     }
 }

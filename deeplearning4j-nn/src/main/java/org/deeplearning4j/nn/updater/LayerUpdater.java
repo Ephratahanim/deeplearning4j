@@ -1,5 +1,6 @@
 package org.deeplearning4j.nn.updater;
 
+import com.google.common.base.Preconditions;
 import org.apache.commons.math3.util.FastMath;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.Updater;
@@ -7,6 +8,7 @@ import org.deeplearning4j.nn.conf.GradientNormalization;
 import org.deeplearning4j.nn.conf.LearningRatePolicy;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.gradient.Gradient;
+import org.deeplearning4j.nn.params.PretrainParamInitializer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.api.ops.impl.accum.Norm2;
 import org.nd4j.linalg.factory.Nd4j;
@@ -56,6 +58,7 @@ public class LayerUpdater implements Updater {
 
     @Override
     public int stateSizeForLayer(Layer layer) {
+        Preconditions.checkNotNull(layer);
         Map<String,INDArray> params = layer.paramTable();
         int count = 0;
         for(Map.Entry<String,INDArray> entry : params.entrySet()){
@@ -74,6 +77,8 @@ public class LayerUpdater implements Updater {
         preApply(layer, gradient, iteration);
         for (Map.Entry<String, INDArray> gradientPair : gradient.gradientForVariable().entrySet()) {
             paramName = gradientPair.getKey();
+            if(!layer.conf().isPretrain() && PretrainParamInitializer.VISIBLE_BIAS_KEY.equals(paramName.split("_")[0]))
+                continue;
             gradientOrig = gradientPair.getValue();
             LearningRatePolicy decay = layer.conf().getLearningRatePolicy();
             if (decay != LearningRatePolicy.None || layer.conf().getLayer().getUpdater() == org.deeplearning4j.nn.conf.Updater.NESTEROVS)
@@ -111,8 +116,11 @@ public class LayerUpdater implements Updater {
         NeuralNetConfiguration conf = layer.conf();
         if (conf.getLayer().getMomentumSchedule().containsKey(iteration)) {
             conf.getLayer().setMomentum(conf.getLayer().getMomentumSchedule().get(iteration));
-            if(updaterForVariable.get(variable) != null)
+            if(updaterForVariable.get(variable) != null) {
                 updaterForVariable.get(variable).update(conf.getLearningRateByParam(variable), conf.getLayer().getMomentumSchedule().get(iteration));
+            }
+        } else if(updaterForVariable.get(variable) != null) {
+            updaterForVariable.get(variable).update(conf.getLearningRateByParam(variable), conf.getLayer().getMomentum());
         }
     }
 
@@ -148,10 +156,11 @@ public class LayerUpdater implements Updater {
                     conf.setLearningRateByParam(variable, conf.getLayer().getLearningRateSchedule().get(iteration));
                 break;
         }
-        if(layer.conf().getLayer().getUpdater() == org.deeplearning4j.nn.conf.Updater.NESTEROVS)
+        if(layer.conf().getLayer().getUpdater() == org.deeplearning4j.nn.conf.Updater.NESTEROVS) {
             applyMomentumDecayPolicy(layer, iteration, variable);
-        else if(updaterForVariable.get(variable) != null)
+        } else if(updaterForVariable.get(variable) != null) {
             updaterForVariable.get(variable).update(conf.getLearningRateByParam(variable));
+        }
     }
 
     /**
@@ -165,7 +174,7 @@ public class LayerUpdater implements Updater {
     public void preApply(Layer layer, Gradient gradient, int iteration) {
 
         GradientNormalization normalization = layer.conf().getLayer().getGradientNormalization();
-        if (normalization == null || normalization == GradientNormalization.None) return;  //no op
+        if (normalization == null || normalization == GradientNormalization.None || layer.conf().isPretrain()) return;  //no op
 
         final double threshold = layer.conf().getLayer().getGradientNormalizationThreshold();
 
@@ -239,7 +248,8 @@ public class LayerUpdater implements Updater {
                 case ADAM:
                     updater = new Adam(layer.conf().getLearningRateByParam(variable),
                             layer.conf().getLayer().getAdamMeanDecay(),
-                            layer.conf().getLayer().getAdamVarDecay());
+                            layer.conf().getLayer().getAdamVarDecay(),
+                            layer.conf().getLayer().getEpsilon());
                     break;
                 case ADADELTA:
                     updater = new AdaDelta(layer.conf().getLayer().getRho(), layer.conf().getLayer().getEpsilon());
@@ -248,10 +258,13 @@ public class LayerUpdater implements Updater {
                     updater = new Nesterovs(layer.conf().getLayer().getMomentum(), layer.conf().getLearningRateByParam(variable));
                     break;
                 case ADAGRAD:
-                    updater = new AdaGrad(layer.conf().getLearningRateByParam(variable), layer.conf().getLayer().getEpsilon());
+                    updater = new AdaGrad(layer.conf().getLearningRateByParam(variable),
+                            layer.conf().getLayer().getEpsilon());
                     break;
                 case RMSPROP:
-                    updater = new org.nd4j.linalg.learning.RmsProp(layer.conf().getLearningRateByParam(variable), layer.conf().getLayer().getRmsDecay());
+                    updater = new org.nd4j.linalg.learning.RmsProp(layer.conf().getLearningRateByParam(variable),
+                            layer.conf().getLayer().getRmsDecay(),
+                            layer.conf().getLayer().getEpsilon());
                     break;
                 case NONE:
                     updater = new NoOpUpdater();

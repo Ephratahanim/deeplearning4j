@@ -3,6 +3,7 @@ package org.deeplearning4j.optimize.solver;
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.api.MaskState;
 import org.deeplearning4j.nn.api.Model;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
@@ -382,6 +383,11 @@ public class TestOptimizers {
         public void setInput(INDArray input) {
 
         }
+
+        @Override
+        public boolean isPretrainLayer() {
+            return false;
+        }
     }
 
 
@@ -558,6 +564,11 @@ public class TestOptimizers {
         @Override
         public void setInput(INDArray input) {
 
+        }
+
+        @Override
+        public boolean isPretrainLayer() {
+            return false;
         }
     }
 
@@ -744,6 +755,11 @@ public class TestOptimizers {
         public void setInput(INDArray input) {
 
         }
+
+        @Override
+        public boolean isPretrainLayer() {
+            return false;
+        }
     }
 
 
@@ -835,12 +851,12 @@ public class TestOptimizers {
         }
 
         @Override
-        public double calcL2() {
+        public double calcL2(boolean backpropParamsOnly) {
             return 0;
         }
 
         @Override
-        public double calcL1() {
+        public double calcL1(boolean backpropParamsOnly) {
             return 0;
         }
 
@@ -907,6 +923,11 @@ public class TestOptimizers {
         }
 
         @Override
+        public Map<String,INDArray> paramTable(boolean backpropParamsOnly){
+            return paramTable();
+        }
+
+        @Override
         public void setParamTable(Map<String, INDArray> paramTable) { throw new UnsupportedOperationException(); }
 
         @Override
@@ -969,5 +990,13 @@ public class TestOptimizers {
 
         @Override
         public void setMaskArray(INDArray maskArray) { }
+
+        @Override
+        public INDArray getMaskArray(){ return null; }
+
+        @Override
+        public Pair<INDArray, MaskState> feedForwardMaskArray(INDArray maskArray, MaskState currentMaskState, int minibatchSize) {
+            throw new UnsupportedOperationException();
+        }
     }
 }

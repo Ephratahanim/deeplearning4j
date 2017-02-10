@@ -21,6 +21,8 @@ package org.deeplearning4j.nn.layers;
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.berkeley.Triple;
 import org.deeplearning4j.eval.Evaluation;
+import org.deeplearning4j.exception.DL4JInvalidInputException;
+import org.deeplearning4j.nn.api.MaskState;
 import org.deeplearning4j.nn.api.Updater;
 import org.deeplearning4j.nn.api.layers.IOutputLayer;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
@@ -62,11 +64,11 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
 
     private transient Solver solver;
 
-    //NOTE: So shouldn't I have something like this here..with a setter?
-    private transient ILossFunction lossFunction;
-
     private double fullNetworkL1;
     private double fullNetworkL2;
+
+    protected INDArray inputMaskArray;
+    protected MaskState inputMaskArrayState;
 
     public BaseOutputLayer(NeuralNetConfiguration conf) {
         super(conf);
@@ -93,7 +95,8 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
 
         ILossFunction lossFunction = layerConf().getLossFn();
 
-        double score = lossFunction.computeScore(getLabels2d(), preOut, layerConf().getActivationFunction(), maskArray, false);
+        //double score = lossFunction.computeScore(getLabels2d(), preOut, layerConf().getActivationFunction(), maskArray, false);
+        double score = lossFunction.computeScore(getLabels2d(), preOut, layerConf().getActivationFn(), maskArray, false);
         score += fullNetworkL1 + fullNetworkL2;
         score /= getInputMiniBatchSize();
 
@@ -115,7 +118,7 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
         INDArray preOut = preOutput2d(false);
 
         ILossFunction lossFunction = layerConf().getLossFn();
-        INDArray scoreArray = lossFunction.computeScoreArray(getLabels2d(),preOut,layerConf().getActivationFunction(),maskArray);
+        INDArray scoreArray = lossFunction.computeScoreArray(getLabels2d(),preOut,layerConf().getActivationFn(),maskArray);
         double l1l2 = fullNetworkL1 + fullNetworkL2;
         if(l1l2 != 0.0){
             scoreArray.addi(l1l2);
@@ -129,8 +132,8 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
             return;
 
         INDArray preOut = preOutput2d(true);
-        Triple<Gradient,INDArray,INDArray> triple = getGradientsAndDelta(preOut);
-        this.gradient = triple.getFirst();
+        Pair<Gradient,INDArray> pair = getGradientsAndDelta(preOut);
+        this.gradient = pair.getFirst();
 
         score = computeScore(fullNetworkL1,fullNetworkL2,true);
     }
@@ -148,11 +151,11 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
 
     @Override
     public Pair<Gradient,INDArray> backpropGradient(INDArray epsilon) {
-        Triple<Gradient,INDArray,INDArray> triple = getGradientsAndDelta(preOutput2d(true));	//Returns Gradient and delta^(this), not Gradient and epsilon^(this-1)
-        INDArray delta = triple.getSecond();
+        Pair<Gradient,INDArray> pair = getGradientsAndDelta(preOutput2d(true));	//Returns Gradient and delta^(this), not Gradient and epsilon^(this-1)
+        INDArray delta = pair.getSecond();
 
         INDArray epsilonNext = params.get(DefaultParamInitializer.WEIGHT_KEY).mmul(delta.transpose()).transpose();
-        return new Pair<>(triple.getFirst(),epsilonNext);
+        return new Pair<>(pair.getFirst(),epsilonNext);
     }
 
     /**
@@ -165,10 +168,15 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
     }
 
     /** Returns tuple: {Gradient,Delta,Output} given preOut */
-    private Triple<Gradient,INDArray,INDArray> getGradientsAndDelta(INDArray preOut) {
+    private Pair<Gradient,INDArray> getGradientsAndDelta(INDArray preOut) {
         ILossFunction lossFunction = layerConf().getLossFn();
-        INDArray delta = lossFunction.computeGradient(getLabels2d(),preOut,layerConf().getActivationFunction(),maskArray);
-        INDArray output = Nd4j.getExecutioner().execAndReturn(Nd4j.getOpFactory().createTransform(conf().getLayer().getActivationFunction(), preOut.dup()));    //TODO: do we need dup here?
+        INDArray labels2d = getLabels2d();
+        if(labels2d.size(1) != preOut.size(1)){
+            throw new DL4JInvalidInputException("Labels array numColumns (size(1) = " + labels2d.size(1) + ") does not match output layer"
+                    + " number of outputs (nOut = " + preOut.size(1) + ")");
+        }
+        //INDArray delta = lossFunction.computeGradient(labels2d, preOut, layerConf().getActivationFunction(), maskArray);
+        INDArray delta = lossFunction.computeGradient(labels2d, preOut, layerConf().getActivationFn(), maskArray);
 
         Gradient gradient = new DefaultGradient();
 
@@ -181,7 +189,7 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
         gradient.gradientForVariable().put(DefaultParamInitializer.WEIGHT_KEY,weightGradView);
         gradient.gradientForVariable().put(DefaultParamInitializer.BIAS_KEY,biasGradView);
 
-        return new Triple<>(gradient, delta, output);
+        return new Pair<>(gradient, delta);
     }
 
 
@@ -409,4 +417,8 @@ public abstract class BaseOutputLayer<LayerConfT extends org.deeplearning4j.nn.c
         return labels;
     }
 
+    @Override
+    public boolean isPretrainLayer(){
+        return false;
+    }
 }

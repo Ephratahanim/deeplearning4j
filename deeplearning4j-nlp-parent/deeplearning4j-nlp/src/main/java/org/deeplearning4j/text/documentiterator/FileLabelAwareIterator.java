@@ -56,7 +56,7 @@ public class FileLabelAwareIterator implements LabelAwareIterator {
             reader.close();
 
             document.setContent(builder.toString());
-            document.setLabel(label);
+            document.addLabel(label);
 
             try {
                 reader.close();
@@ -68,6 +68,26 @@ public class FileLabelAwareIterator implements LabelAwareIterator {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public boolean hasNext() {
+        return hasNextDocument();
+    }
+
+    @Override
+    public LabelledDocument next() {
+        return nextDocument();
+    }
+
+    @Override
+    public void remove() {
+        // no-op
+    }
+
+    @Override
+    public void shutdown() {
+        // no-op
     }
 
     @Override

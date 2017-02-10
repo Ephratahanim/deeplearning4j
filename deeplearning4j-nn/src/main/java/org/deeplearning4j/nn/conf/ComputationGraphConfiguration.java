@@ -17,6 +17,10 @@
  */
 package org.deeplearning4j.nn.conf;
 
+import org.deeplearning4j.nn.conf.layers.BasePretrainNetwork;
+import org.nd4j.linalg.activations.Activation;
+import org.nd4j.linalg.activations.IActivation;
+import org.nd4j.shade.jackson.databind.JsonNode;
 import org.nd4j.shade.jackson.databind.ObjectMapper;
 import org.nd4j.shade.jackson.databind.introspect.AnnotatedClass;
 import org.nd4j.shade.jackson.databind.jsontype.NamedType;
@@ -35,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ComputationGraphConfiguration is a configuration object for neural networks with arbitrary connection structure.
@@ -69,13 +74,18 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
      */
     protected List<String> networkOutputs;
 
-    protected boolean pretrain = true;
-    protected boolean backprop = false;
+    protected boolean pretrain = false;
+    protected boolean backprop = true;
     protected BackpropType backpropType = BackpropType.Standard;
     protected int tbpttFwdLength = 20;
     protected int tbpttBackLength = 20;
 
     protected NeuralNetConfiguration defaultConfiguration;
+
+    //Counter for the number of parameter updates so far
+    // This is important for learning rate schedules, for example, and is stored here to ensure it is persisted
+    // for Spark and model serialization
+    protected int iterationCount = 0;
 
 
     /**
@@ -127,48 +137,63 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
     public static ComputationGraphConfiguration fromJson(String json) {
         //As per MultiLayerConfiguration.fromJson()
         ObjectMapper mapper = NeuralNetConfiguration.mapper();
+        ComputationGraphConfiguration conf;
         try {
-            return mapper.readValue(json, ComputationGraphConfiguration.class);
-        } catch (IOException e) {
-            //No op - try again after adding new subtypes
-        }
-
-        //Try: programmatically registering JSON subtypes for GraphVertex classes. This allows users to add custom GraphVertex
-        // implementations without needing to manually register subtypes
-        //First: get all registered subtypes
-        AnnotatedClass ac = AnnotatedClass.construct(GraphVertex.class, mapper.getSerializationConfig().getAnnotationIntrospector(), null);
-        Collection<NamedType> types = mapper.getSubtypeResolver().collectAndResolveSubtypes(ac, mapper.getSerializationConfig(), mapper.getSerializationConfig().getAnnotationIntrospector());
-        Set<Class<?>> registeredSubtypes = new HashSet<>();
-        for (NamedType nt : types) {
-            registeredSubtypes.add(nt.getType());
-        }
-
-        //Second: get all subtypes of GraphVertex using reflection
-        Reflections reflections = new Reflections();
-        Set<Class<? extends GraphVertex>> subTypes = reflections.getSubTypesOf(GraphVertex.class);
-
-        //Third: register all subtypes that are not already registered
-        List<NamedType> toRegister = new ArrayList<>();
-        for (Class<? extends GraphVertex> c : subTypes) {
-            if (!registeredSubtypes.contains(c)) {
-                String name;
-                if (ClassUtils.isInnerClass(c)) {
-                    Class<?> c2 = c.getDeclaringClass();
-                    name = c2.getSimpleName() + "$" + c.getSimpleName();
-                } else {
-                    name = c.getSimpleName();
-                }
-                toRegister.add(new NamedType(c, name));
-            }
-        }
-        mapper = NeuralNetConfiguration.reinitMapperWithSubtypes(toRegister);
-
-
-        try {
-            return mapper.readValue(json, ComputationGraphConfiguration.class);
+            conf = mapper.readValue(json, ComputationGraphConfiguration.class);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+
+        //To maintain backward compatibility after activation function refactoring (configs generated with v0.7.1 or earlier)
+        // Previously: enumeration used for activation functions. Now: use classes
+        int layerCount = 0;
+        Map<String,GraphVertex> vertexMap = conf.getVertices();
+        JsonNode vertices = null;
+        for(Map.Entry<String,GraphVertex> entry : vertexMap.entrySet()){
+            if(!(entry.getValue() instanceof LayerVertex)){
+                continue;
+            }
+
+            LayerVertex lv = (LayerVertex)entry.getValue();
+            if(lv.getLayerConf() != null && lv.getLayerConf().getLayer() != null){
+                Layer layer = lv.getLayerConf().getLayer();
+
+                if(layer.getActivationFn() == null){
+                    String layerName = layer.getLayerName();
+
+                    try{
+                        if(vertices == null){
+                            JsonNode jsonNode = mapper.readTree(json);
+                            vertices = jsonNode.get("vertices");
+                        }
+
+                        JsonNode vertexNode = vertices.get(layerName);
+                        JsonNode layerVertexNode = vertexNode.get("LayerVertex");
+                        if(layerVertexNode == null || !layerVertexNode.has("layerConf") || !layerVertexNode.get("layerConf").has("layer")){
+                            continue;
+                        }
+                        JsonNode layerWrapperNode = layerVertexNode.get("layerConf").get("layer");
+
+                        if(layerWrapperNode == null || layerWrapperNode.size() != 1){
+                            continue;
+                        }
+
+                        JsonNode layerNode = layerWrapperNode.elements().next();
+                        JsonNode activationFunction = layerNode.get("activationFunction");      //Should only have 1 element: "dense", "output", etc
+
+                        if(activationFunction != null){
+                            IActivation ia = Activation.fromString(activationFunction.asText()).getActivationFunction();
+                            layer.setActivationFn(ia);
+                        }
+
+                    } catch (IOException e ){
+                        log.warn("Layer with null ActivationFn field or pre-0.7.2 activation function detected: could not parse JSON",e);
+                    }
+                }
+            }
+        }
+
+        return conf;
     }
 
     @Override
@@ -180,12 +205,12 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
     public ComputationGraphConfiguration clone() {
         ComputationGraphConfiguration conf = new ComputationGraphConfiguration();
 
-        conf.vertices = new HashMap<>();
+        conf.vertices = new LinkedHashMap<>();
         for (Map.Entry<String, GraphVertex> entry : this.vertices.entrySet()) {
             conf.vertices.put(entry.getKey(), entry.getValue().clone());
         }
 
-        conf.vertexInputs = new HashMap<>();
+        conf.vertexInputs = new LinkedHashMap<>();
         for (Map.Entry<String, List<String>> entry : this.vertexInputs.entrySet()) {
             conf.vertexInputs.put(entry.getKey(), new ArrayList<>(entry.getValue()));
         }
@@ -325,6 +350,7 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
 
         //Now, given the topological sort: do equivalent of forward pass
         Map<String, InputType> vertexOutputs = new HashMap<>();
+        int currLayerIdx = -1;
         for (String s : topologicalOrdering) {
             int inputIdx = networkInputs.indexOf(s);
             if (inputIdx != -1) {
@@ -360,6 +386,7 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
                 }
                 l.setNIn(afterPreproc, false);
 
+                currLayerIdx++;
             } else {
                 List<String> inputs = vertexInputs.get(s);
                 if (inputs != null) {
@@ -369,7 +396,7 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
                 }
             }
 
-            InputType outputFromVertex = gv.getOutputType(inputTypeList.toArray(new InputType[inputTypeList.size()]));
+            InputType outputFromVertex = gv.getOutputType(currLayerIdx, inputTypeList.toArray(new InputType[inputTypeList.size()]));
             vertexOutputs.put(s, outputFromVertex);
         }
     }
@@ -600,6 +627,7 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
             conf.vertexInputs = this.vertexInputs;
 
             conf.defaultConfiguration = globalConfiguration.build();
+            conf.getDefaultConfiguration().setPretrain(pretrain);
 
             //Add preprocessors that were defined separately to the Layers to which they belong
             for (Map.Entry<String, InputPreProcessor> entry : inputPreProcessors.entrySet()) {
@@ -611,6 +639,16 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
                     throw new IllegalStateException("Invalid configuration: InputPreProcessor defined for GraphVertex \"" + entry.getKey()
                             + "\", but this vertex is not a LayerVertex");
                 }
+
+            }
+
+            for (Map.Entry<String, GraphVertex> gv : vertices.entrySet()) {
+                if (gv.getValue() instanceof LayerVertex) {
+                    LayerVertex lv = (LayerVertex) gv.getValue();
+                    Layer l = lv.getLayerConf().getLayer();
+                    if (l instanceof BasePretrainNetwork) lv.getLayerConf().setPretrain(pretrain);
+                }
+
             }
 
             conf.validate();    //throws exception for invalid configuration

@@ -48,7 +48,7 @@ public class ConvolutionParamInitializer implements ParamInitializer {
     public final static String BIAS_KEY = DefaultParamInitializer.BIAS_KEY;
 
     @Override
-    public int numParams(NeuralNetConfiguration conf, boolean backprop) {
+    public int numParams(NeuralNetConfiguration conf) {
         org.deeplearning4j.nn.conf.layers.ConvolutionLayer layerConf =
                 (org.deeplearning4j.nn.conf.layers.ConvolutionLayer) conf.getLayer();
 
@@ -73,7 +73,7 @@ public class ConvolutionParamInitializer implements ParamInitializer {
         int nOut = layerConf.getNOut();
 
         INDArray biasView = paramsView.get(NDArrayIndex.point(0), NDArrayIndex.interval(0, nOut));
-        INDArray weightView = paramsView.get(NDArrayIndex.point(0), NDArrayIndex.interval(nOut, numParams(conf,true)));
+        INDArray weightView = paramsView.get(NDArrayIndex.point(0), NDArrayIndex.interval(nOut, numParams(conf)));
 
         params.put(BIAS_KEY, createBias(conf, biasView, initializeParams));
         params.put(WEIGHT_KEY, createWeightMatrix(conf, weightView, initializeParams));
@@ -94,7 +94,7 @@ public class ConvolutionParamInitializer implements ParamInitializer {
         int nOut = layerConf.getNOut();
 
         INDArray biasGradientView = gradientView.get(NDArrayIndex.point(0), NDArrayIndex.interval(0, nOut));
-        INDArray weightGradientView = gradientView.get(NDArrayIndex.point(0), NDArrayIndex.interval(nOut, numParams(conf,true)))
+        INDArray weightGradientView = gradientView.get(NDArrayIndex.point(0), NDArrayIndex.interval(nOut, numParams(conf)))
                 .reshape('c',nOut, nIn, kernel[0], kernel[1]);
 
         Map<String,INDArray> out = new LinkedHashMap<>();
@@ -126,7 +126,17 @@ public class ConvolutionParamInitializer implements ParamInitializer {
         if(initializeParams) {
             Distribution dist = Distributions.createDistribution(conf.getLayer().getDist());
             int[] kernel = layerConf.getKernelSize();
-            return WeightInitUtil.initWeights(new int[]{layerConf.getNOut(), layerConf.getNIn(), kernel[0], kernel[1]},
+            int[] stride = layerConf.getStride();
+
+            int inputDepth = layerConf.getNIn();
+            int outputDepth = layerConf.getNOut();
+
+            double fanIn = inputDepth * kernel[0] * kernel[1];
+            double fanOut = outputDepth * kernel[0] * kernel[1] / ((double) stride[0] * stride[1]);
+
+            int[] weightsShape = new int[]{outputDepth, inputDepth, kernel[0], kernel[1]};
+
+            return WeightInitUtil.initWeights(fanIn, fanOut, weightsShape,
                     layerConf.getWeightInit(), dist, 'c', weightView);
         } else {
             int[] kernel = layerConf.getKernelSize();

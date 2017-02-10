@@ -19,16 +19,19 @@ package org.deeplearning4j.nn.layers.recurrent;
 
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.api.MaskState;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.layers.BaseOutputLayer;
 import org.deeplearning4j.nn.params.DefaultParamInitializer;
 import org.deeplearning4j.util.Dropout;
 import org.deeplearning4j.util.TimeSeriesUtils;
+import org.nd4j.linalg.activations.impl.ActivationSoftmax;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.api.ops.impl.transforms.SoftMax;
 import org.nd4j.linalg.api.shape.Shape;
 import org.nd4j.linalg.factory.Nd4j;
+import org.nd4j.linalg.lossfunctions.ILossFunction;
 
 /**Recurrent Neural Network Output Layer.<br>
  * Handles calculation of gradients etc for various objective functions.<br>
@@ -139,7 +142,8 @@ public class RnnOutputLayer extends BaseOutputLayer<org.deeplearning4j.nn.conf.l
         if(input.rank() != 3 ) throw new IllegalArgumentException("input must be rank 3");
         INDArray preOutput2d = preOutput2d(training);
 
-        if(conf.getLayer().getActivationFunction().equals("softmax")) {
+        //if(conf.getLayer().getActivationFunction().equals("softmax")) {
+        if(conf.getLayer().getActivationFn() instanceof ActivationSoftmax) {
             INDArray out2d = Nd4j.getExecutioner().execAndReturn(new SoftMax(preOutput2d));
             if(maskArray != null){
                 out2d.muliColumnVector(maskArray);
@@ -170,8 +174,9 @@ public class RnnOutputLayer extends BaseOutputLayer<org.deeplearning4j.nn.conf.l
 
         INDArray input2d = reshape3dTo2d(input);
 
-        INDArray act2d = Nd4j.getExecutioner().execAndReturn(Nd4j.getOpFactory().createTransform(conf.getLayer().getActivationFunction(),
-                input2d.mmul(W).addiRowVector(b)));
+        //INDArray act2d = Nd4j.getExecutioner().execAndReturn(Nd4j.getOpFactory().createTransform(conf.getLayer().getActivationFunction(),
+        //        input2d.mmul(W).addiRowVector(b)));
+        INDArray act2d = conf.getLayer().getActivationFn().getActivation(input2d.mmul(W).addiRowVector(b),training);
         if(maskArray != null){
             act2d.muliColumnVector(maskArray);
         }
@@ -184,5 +189,50 @@ public class RnnOutputLayer extends BaseOutputLayer<org.deeplearning4j.nn.conf.l
             maskArray = TimeSeriesUtils.reshapeTimeSeriesMaskToVector(maskArray);
         }
         this.maskArray = maskArray;
+    }
+
+    @Override
+    public Pair<INDArray, MaskState> feedForwardMaskArray(INDArray maskArray, MaskState currentMaskState, int minibatchSize) {
+
+        //If the *input* mask array is present and active, we should use it to mask the output
+        if(maskArray != null && currentMaskState == MaskState.Active){
+            this.inputMaskArray = TimeSeriesUtils.reshapeTimeSeriesMaskToVector(maskArray);
+            this.inputMaskArrayState = currentMaskState;
+        } else {
+            this.inputMaskArray = null;
+            this.inputMaskArrayState = null;
+        }
+
+        return null;    //Last layer in network
+    }
+
+    /**Compute the score for each example individually, after labels and input have been set.
+     *
+     * @param fullNetworkL1 L1 regularization term for the entire network (or, 0.0 to not include regularization)
+     * @param fullNetworkL2 L2 regularization term for the entire network (or, 0.0 to not include regularization)
+     * @return A column INDArray of shape [numExamples,1], where entry i is the score of the ith example
+     */
+    @Override
+    public INDArray computeScoreForExamples(double fullNetworkL1, double fullNetworkL2){
+        //For RNN: need to sum up the score over each time step before returning.
+
+        if( input == null || labels == null )
+            throw new IllegalStateException("Cannot calculate score without input and labels");
+        INDArray preOut = preOutput2d(false);
+
+        ILossFunction lossFunction = layerConf().getLossFn();
+        INDArray scoreArray = lossFunction.computeScoreArray(getLabels2d(),preOut,layerConf().getActivationFn(),maskArray);
+        //scoreArray: shape [minibatch*timeSeriesLength, 1]
+        //Reshape it to [minibatch, timeSeriesLength] then sum over time step
+
+        INDArray scoreArrayTs = TimeSeriesUtils.reshapeVectorToTimeSeriesMask(scoreArray, input.size(0));
+        INDArray summedScores = scoreArrayTs.sum(1);
+
+        double l1l2 = fullNetworkL1 + fullNetworkL2;
+        if(l1l2 != 0.0){
+            summedScores.addi(l1l2);
+        }
+
+        return summedScores;
     }
 }

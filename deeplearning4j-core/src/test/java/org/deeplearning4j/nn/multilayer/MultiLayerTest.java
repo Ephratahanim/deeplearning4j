@@ -18,15 +18,20 @@
 
 package org.deeplearning4j.nn.multilayer;
 
+import org.deeplearning4j.base.MnistFetcher;
 import org.deeplearning4j.berkeley.Pair;
+import org.deeplearning4j.datasets.fetchers.MnistDataFetcher;
 import org.deeplearning4j.datasets.iterator.impl.CifarDataSetIterator;
 import org.deeplearning4j.datasets.iterator.impl.IrisDataSetIterator;
 import org.deeplearning4j.datasets.iterator.impl.MnistDataSetIterator;
+import org.deeplearning4j.datasets.mnist.MnistManager;
 import org.deeplearning4j.eval.Evaluation;
+import org.deeplearning4j.exception.DL4JException;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
+import org.deeplearning4j.nn.conf.Updater;
 import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
 import org.deeplearning4j.nn.conf.distribution.UniformDistribution;
 import org.deeplearning4j.nn.conf.inputs.InputType;
@@ -39,6 +44,7 @@ import org.deeplearning4j.nn.params.PretrainParamInitializer;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.api.IterationListener;
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
+import org.deeplearning4j.util.ModelSerializer;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.nd4j.linalg.api.ndarray.INDArray;
@@ -57,6 +63,9 @@ import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.*;
 
 import static org.junit.Assert.*;
@@ -166,7 +175,6 @@ public class MultiLayerTest {
         INDArray output = network.output(test.getFeatureMatrix());
         eval.eval(test.getLabels(), output);
         log.info("Score " + eval.stats());
-
     }
 
     @Test
@@ -184,7 +192,7 @@ public class MultiLayerTest {
                         .nIn(4).nOut(3)
                         .weightInit(WeightInit.DISTRIBUTION).dist(new UniformDistribution(0, 1))
                         .activation("tanh")
-                        .lossFunction(LossFunctions.LossFunction.RMSE_XENT).build())
+                        .lossFunction(LossFunctions.LossFunction.KL_DIVERGENCE).build())
                 .layer(1, new org.deeplearning4j.nn.conf.layers.OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
                         .nIn(3).nOut(3)
                         .weightInit(WeightInit.DISTRIBUTION).dist(new UniformDistribution(0, 1))
@@ -476,7 +484,7 @@ public class MultiLayerTest {
 
         assertEquals(layerNameList.get(0), net.getLayer(0).conf().getLayer().getLayerName());
         assertEquals(layerNameList, net.getLayerNames());
-        assertEquals("softmax", net.getLayer(layerNameList.get(2)).conf().getLayer().getActivationFunction());
+        assertEquals("softmax", net.getLayer(layerNameList.get(2)).conf().getLayer().getActivationFn().toString());
     }
 
     @Test
@@ -652,19 +660,21 @@ public class MultiLayerTest {
                 .weightInit(WeightInit.XAVIER)
                 .seed(12345L)
                 .list()
-                .layer(0, new DenseLayer.Builder().nIn(400).nOut(50).activation("relu").build())
+                .layer(0, new DenseLayer.Builder().nIn(784).nOut(50).activation("relu").build())
                 .layer(1, new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax").nIn(50).nOut(10).build())
                 .pretrain(false).backprop(true)
+                .setInputType(InputType.convolutional(28,28,1))
                 .build();
 
         MultiLayerNetwork net = new MultiLayerNetwork(conf);
         net.init();
 
-        DataSetIterator ds = new CifarDataSetIterator(10,10, new int[]{20,20,1});
+        DataSetIterator ds = new MnistDataSetIterator(10,10);
         net.fit(ds);
 
-        DataSetIterator testDs = new CifarDataSetIterator(1,1, new int[]{20,20,1});
+        DataSetIterator testDs = new MnistDataSetIterator(1,1);
         DataSet testData = testDs.next();
+        testData.setLabelNames(Arrays.asList("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"));
         String actualLables = testData.getLabelName(0);
         List<String> prediction = net.predict(testData);
         assertTrue(actualLables != null);
@@ -695,15 +705,16 @@ public class MultiLayerTest {
                 .weightInit(WeightInit.XAVIER)
                 .seed(12345L)
                 .list()
-                .layer(0, new DenseLayer.Builder().nIn(400).nOut(50).activation("relu").build())
+                .layer(0, new DenseLayer.Builder().nIn(784).nOut(50).activation("relu").build())
                 .layer(1, new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax").nIn(50).nOut(10).build())
                 .pretrain(false).backprop(true)
+                .setInputType(InputType.convolutional(28,28,1))
                 .build();
 
         MultiLayerNetwork net = new MultiLayerNetwork(conf);
         net.init();
 
-        DataSetIterator fullData = new CifarDataSetIterator(1,2, new int[] {20,20,1});
+        DataSetIterator fullData = new MnistDataSetIterator(1,2);
         net.fit(fullData);
 
 
@@ -764,4 +775,136 @@ public class MultiLayerTest {
     }
 
 
+    @Test(expected = DL4JException.class)
+    public void testCnnInvalidData(){
+
+        int miniBatch = 3;
+        int depth = 2;
+        int width = 5;
+        int height = 5;
+
+        MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
+                .list()
+                .layer(0, new ConvolutionLayer.Builder().kernelSize(2,2).stride(1,1).padding(0,0).nIn(2).nOut(2).build())
+                .layer(1, new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax").nOut(2).build())
+                .setInputType(InputType.convolutional(height,width,depth))
+                .pretrain(false).backprop(true).build();
+
+        MultiLayerNetwork net = new MultiLayerNetwork(conf);
+        net.init();
+
+        INDArray inputWrongDepth = Nd4j.rand(new int[]{miniBatch,5,height,width}); //Order: examples, channels, height, width
+        net.feedForward(inputWrongDepth);
+
+    }
+
+    @Test
+    public void testApplyingPreTrainConfigAndParams(){
+        int nIn = 10;
+        int nOut = 10;
+
+        // Test pretrain true
+        MultiLayerNetwork rbmPre = getRBMModel(true, nIn, nOut);
+        assertTrue(rbmPre.conf().isPretrain()); // check on the network
+        assertTrue(rbmPre.getLayer(0).conf().isPretrain()); // check pretrain layer
+        assertFalse(rbmPre.getLayer(1).conf().isPretrain()); // check none pretrain layer
+        int actualNP = rbmPre.numParams();
+        assertEquals(2 * (nIn * nOut + nOut) + nIn, actualNP);
+        INDArray params = rbmPre.params();
+        assertEquals(params.length(), actualNP); // check num params
+        Map<String, INDArray> paramTable = rbmPre.paramTable();
+        assertTrue(paramTable.containsKey("0_vb")); // check vb exists for pretrain layer
+        rbmPre.setParam("0_vb", Nd4j.ones(10));
+        params = rbmPre.getParam("0_vb");
+        assertEquals(Nd4j.ones(10), params); // check set params for vb
+
+
+        // Test pretrain false, expect same for true because its not changed when applying update
+        MultiLayerNetwork rbmNoPre = getRBMModel(false, nIn, nOut);
+        assertFalse(rbmNoPre.conf().isPretrain());
+        assertFalse(rbmNoPre.getLayer(0).conf().isPretrain());
+        assertFalse(rbmPre.getLayer(1).conf().isPretrain());
+        actualNP = rbmNoPre.numParams();
+        assertEquals(2 * (nIn * nOut + nOut) + nIn, actualNP);
+        params = rbmNoPre.params();
+        assertEquals(params.length(), actualNP);
+        paramTable = rbmPre.paramTable();
+        assertTrue(paramTable.containsKey("0_vb"));
+    }
+
+    @Test
+    public void testLayerPreTrainSetFalseAfterPreTrain(){
+        INDArray input = Nd4j.linspace(1, 10, 10);
+        int nIn = 10;
+        int nOut = 10;
+
+        MultiLayerNetwork rbmPre = getRBMModel(true, nIn, nOut);
+        rbmPre.fit(input);
+        assertTrue(rbmPre.conf().isPretrain()); // check on the network
+        assertFalse(rbmPre.getLayer(0).conf().isPretrain()); // check pretrain layer
+        assertFalse(rbmPre.getLayer(1).conf().isPretrain()); // check none pretrain layer
+
+    }
+
+    public MultiLayerNetwork getRBMModel(boolean preTrain, int nIn, int nOut){
+        MultiLayerConfiguration rbm = new NeuralNetConfiguration.Builder()
+                .seed(42)
+                .iterations(1)
+                .updater(Updater.NONE)
+                .epsilon(1)
+                .weightInit(WeightInit.UNIFORM)
+                .list(
+                        new org.deeplearning4j.nn.conf.layers.RBM.Builder()
+                                .lossFunction(LossFunctions.LossFunction.COSINE_PROXIMITY)
+                                .activation("identity")
+                                .nOut(nIn).build(),
+                        new org.deeplearning4j.nn.conf.layers.OutputLayer.Builder(LossFunctions.LossFunction.COSINE_PROXIMITY)
+                                .activation("identity")
+                                .nOut(nOut).build()
+                )
+                .pretrain(preTrain)
+                .setInputType(InputType.feedForward(nOut))
+                .build();
+        MultiLayerNetwork network = new MultiLayerNetwork(rbm);
+        network.init();
+        return network;
+    }
+
+
+    @Test
+    public void testIterationCountAndPresistence() throws IOException {
+        Nd4j.getRandom().setSeed(123);
+        MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
+                .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                .iterations(1)
+                .seed(123)
+                .list()
+                .layer(0, new DenseLayer.Builder().nIn(4).nOut(3).weightInit(WeightInit.XAVIER).activation("tanh").build())
+                .layer(1, new org.deeplearning4j.nn.conf.layers.OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation("softmax").nIn(3).nOut(3).build())
+                .backprop(true).pretrain(false).build();
+
+
+        MultiLayerNetwork network = new MultiLayerNetwork(conf);
+        network.init();
+
+        DataSetIterator iter = new IrisDataSetIterator(50, 150);
+
+        assertEquals(0, network.getLayerWiseConfigurations().getIterationCount());
+        network.fit(iter);
+        assertEquals(3, network.getLayerWiseConfigurations().getIterationCount());
+        iter.reset();
+        network.fit(iter);
+        assertEquals(6, network.getLayerWiseConfigurations().getIterationCount());
+        iter.reset();
+        network.fit(iter.next());
+        assertEquals(7, network.getLayerWiseConfigurations().getIterationCount());
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ModelSerializer.writeModel(network, baos, true);
+        byte[] asBytes = baos.toByteArray();
+
+        ByteArrayInputStream bais = new ByteArrayInputStream(asBytes);
+        MultiLayerNetwork net = ModelSerializer.restoreMultiLayerNetwork(bais, true);
+        assertEquals(7, net.getLayerWiseConfigurations().getIterationCount());
+    }
 }

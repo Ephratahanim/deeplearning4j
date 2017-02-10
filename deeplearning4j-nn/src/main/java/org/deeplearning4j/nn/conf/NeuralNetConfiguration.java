@@ -18,13 +18,6 @@
 
 package org.deeplearning4j.nn.conf;
 
-import org.nd4j.shade.jackson.databind.DeserializationFeature;
-import org.nd4j.shade.jackson.databind.MapperFeature;
-import org.nd4j.shade.jackson.databind.ObjectMapper;
-import org.nd4j.shade.jackson.databind.SerializationFeature;
-import org.nd4j.shade.jackson.databind.introspect.AnnotatedClass;
-import org.nd4j.shade.jackson.databind.jsontype.NamedType;
-import org.nd4j.shade.jackson.dataformat.yaml.YAMLFactory;
 import com.google.common.collect.Sets;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -33,20 +26,38 @@ import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.distribution.Distribution;
 import org.deeplearning4j.nn.conf.distribution.NormalDistribution;
 import org.deeplearning4j.nn.conf.graph.GraphVertex;
+import org.deeplearning4j.nn.conf.layers.ConvolutionLayer;
 import org.deeplearning4j.nn.conf.layers.Layer;
+import org.deeplearning4j.nn.conf.layers.SubsamplingLayer;
+import org.deeplearning4j.nn.conf.layers.variational.ReconstructionDistribution;
 import org.deeplearning4j.nn.conf.stepfunctions.StepFunction;
-import org.deeplearning4j.nn.params.DefaultParamInitializer;
+import org.deeplearning4j.util.reflections.DL4JSubTypesScanner;
 import org.deeplearning4j.nn.weights.WeightInit;
+import org.nd4j.linalg.activations.Activation;
+import org.nd4j.linalg.activations.IActivation;
+import org.nd4j.linalg.activations.impl.*;
 import org.nd4j.linalg.factory.Nd4j;
+import org.nd4j.linalg.learning.*;
 import org.nd4j.linalg.lossfunctions.ILossFunction;
+import org.nd4j.shade.jackson.databind.DeserializationFeature;
+import org.nd4j.shade.jackson.databind.MapperFeature;
+import org.nd4j.shade.jackson.databind.ObjectMapper;
+import org.nd4j.shade.jackson.databind.SerializationFeature;
+import org.nd4j.shade.jackson.databind.introspect.AnnotatedClass;
+import org.nd4j.shade.jackson.databind.jsontype.NamedType;
+import org.nd4j.shade.jackson.dataformat.yaml.YAMLFactory;
 import org.reflections.ReflectionUtils;
 import org.reflections.Reflections;
+import org.reflections.util.ClasspathHelper;
+import org.reflections.util.ConfigurationBuilder;
+import org.reflections.util.FilterBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
 import java.lang.reflect.Modifier;
+import java.net.URL;
 import java.util.*;
 
 
@@ -62,7 +73,17 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
 
     private static final Logger log = LoggerFactory.getLogger(NeuralNetConfiguration.class);
 
+    /**
+     * System property for custom layers, preprocessors, graph vertices etc. Enabled by default.
+     * Run JVM with "-Dorg.deeplearning4j.config.custom.enabled=false" to disable classpath scanning for
+     * Overriding the default (i.e., disabling) this is only useful if (a) no custom layers/preprocessors etc will be
+     * used, and (b) minimizing startup/initialization time for new JVMs is very important.
+     * Results are cached, so there is no cost to custom layers after the first network has been constructed.
+     */
+    public static final String CUSTOM_FUNCTIONALITY = "org.deeplearning4j.config.custom.enabled";
+
     protected Layer layer;
+    @Deprecated
     protected double leakyreluAlpha;
     //batch size: primarily used for conv nets. Will be reinforced if set.
     protected boolean miniBatch = true;
@@ -88,6 +109,20 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
     protected double lrPolicyDecayRate;
     protected double lrPolicySteps;
     protected double lrPolicyPower;
+    protected boolean pretrain;
+
+    //Counter for the number of parameter updates so far for this layer.
+    //Note that this is only used for pretrain layers (RBM, VAE) - MultiLayerConfiguration and ComputationGraphConfiguration
+    //contain counters for standard backprop training.
+    // This is important for learning rate schedules, for example, and is stored here to ensure it is persisted
+    // for Spark and model serialization
+    protected int iterationCount = 0;
+
+
+    private static ObjectMapper mapper = initMapper();
+    private static final ObjectMapper mapperYaml = initMapperYaml();
+    private static Set<Class<?>> subtypesClassCache = null;
+
 
     /**
      * Creates and returns a deep copy of the configuration.
@@ -123,11 +158,10 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
             setLayerParamLR(variable);
         }
     }
-    
-    public void clearVariables(){
-    	variables.clear();
-    }
 
+    public void clearVariables(){
+        variables.clear();
+    }
 
     public void setLayerParamLR(String variable){
         double lr = layer.getLearningRateByParam(variable);
@@ -155,7 +189,6 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
         return l2ByParam.get(variable);
     }
 
-
     /**
      * Fluent interface for building a list of configurations
      */
@@ -173,9 +206,9 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
             this(globalConfig,new HashMap<Integer, Builder>());
         }
 
-
         public ListBuilder backprop(boolean backprop) {
             this.backprop = backprop;
+
             return this;
         }
 
@@ -209,7 +242,7 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
             for(int i = 0; i < layerwise.size(); i++) {
                 if(layerwise.get(i) == null){
                     throw new IllegalStateException("Invalid configuration: layer number " + i + " not specified. Expect layer "
-                        + "numbers to be 0 to " + (layerwise.size()-1) + " inclusive (number of layers defined: " + layerwise.size() + ")");
+                            + "numbers to be 0 to " + (layerwise.size()-1) + " inclusive (number of layers defined: " + layerwise.size() + ")");
                 }
                 if(layerwise.get(i).getLayer() == null) throw new IllegalStateException("Cannot construct network: Layer config for" +
                         "layer with index " + i + " is not defined)");
@@ -294,13 +327,8 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
         return mapperYaml;
     }
 
-    private static final ObjectMapper mapperYaml = initMapperYaml();
-
     private static ObjectMapper initMapperYaml() {
         ObjectMapper ret = new ObjectMapper(new YAMLFactory());
-//        ret.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-//        ret.configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
-//        ret.enable(SerializationFeature.INDENT_OUTPUT);
         configureMapper(ret);
         return ret;
     }
@@ -324,8 +352,6 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
         return mapper;
     }
 
-    private static ObjectMapper mapper = initMapper();
-
     private static ObjectMapper initMapper() {
         ObjectMapper ret = new ObjectMapper();
         configureMapper(ret);
@@ -338,26 +364,77 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
         ret.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
         ret.enable(SerializationFeature.INDENT_OUTPUT);
 
-        registerSubtypes(ret, Layer.class, InputPreProcessor.class, GraphVertex.class, ILossFunction.class );
+        registerSubtypes(ret);
     }
 
-    private static void registerSubtypes(ObjectMapper mapper, Class<?>... baseClasses){
+    private static synchronized void registerSubtypes(ObjectMapper mapper){
         //Register concrete subtypes for JSON serialization
 
-        // First: scan the classpath and find all instances of the 'baseClasses' classes
-        Reflections reflections = new Reflections();
-        org.reflections.Store store = reflections.getStore();
-        List<String> classNames = new ArrayList<>();
-        for(Class<?> c : baseClasses){
-            classNames.add(c.getName());
-        }
+        List<Class<?>> classes = Arrays.<Class<?>>asList(InputPreProcessor.class, ILossFunction.class, IActivation.class, Layer.class, GraphVertex.class, ReconstructionDistribution.class);
+        List<String> classNames = new ArrayList<>(6);
+        for(Class<?> c : classes) classNames.add(c.getName());
 
-        Iterable<String> subtypesByName = store.getAll(org.reflections.scanners.SubTypesScanner.class.getSimpleName(), classNames);
-        Set<? extends Class<?>> subtypeClasses = Sets.newHashSet(ReflectionUtils.forNames(subtypesByName));
+        // First: scan the classpath and find all instances of the 'baseClasses' classes
+        if(subtypesClassCache == null){
+
+            //Check system property:
+            String prop = System.getProperty(CUSTOM_FUNCTIONALITY);
+            if(prop != null && !Boolean.parseBoolean(prop)){
+
+                subtypesClassCache = Collections.emptySet();
+            } else {
+
+                List<Class<?>> interfaces = Arrays.<Class<?>>asList(InputPreProcessor.class, ILossFunction.class, IActivation.class, ReconstructionDistribution.class);
+                List<Class<?>> classesList = Arrays.<Class<?>>asList(Layer.class, GraphVertex.class);
+
+                Collection<URL> urls = ClasspathHelper.forClassLoader();
+                List<URL> scanUrls = new ArrayList<>();
+                for (URL u : urls) {
+                    String path = u.getPath();
+                    if (!path.matches(".*/jre/lib/.*jar")) {    //Skip JRE/JDK JARs
+                        scanUrls.add(u);
+                    }
+                }
+
+                Reflections reflections = new Reflections(new ConfigurationBuilder()
+                        .filterInputsBy(new FilterBuilder()
+                                .exclude("^(?!.*\\.class$).*$")     //Consider only .class files (to avoid debug messages etc. on .dlls, etc
+                                //Exclude the following: the assumption here is that no custom functionality will ever be present
+                                // under these package name prefixes. These are all common dependencies for DL4J
+                                .exclude("^org.nd4j.*")
+                                .exclude("^org.datavec.*")
+                                .exclude("^org.bytedeco.*") //JavaCPP
+                                .exclude("^com.fasterxml.*")//Jackson
+                                .exclude("^org.apache.*")   //Apache commons, Spark, log4j etc
+                                .exclude("^org.projectlombok.*")
+                                .exclude("^com.twelvemonkeys.*")
+                                .exclude("^org.joda.*")
+                                .exclude("^org.slf4j.*")
+                                .exclude("^com.google.*")
+                                .exclude("^org.reflections.*")
+                                .exclude("^ch.qos.*")       //Logback
+                        )
+                        .addUrls(scanUrls)
+                        .setScanners(new DL4JSubTypesScanner(interfaces, classesList)));
+                org.reflections.Store store = reflections.getStore();
+
+                Iterable<String> subtypesByName = store.getAll(DL4JSubTypesScanner.class.getSimpleName(), classNames);
+
+                Set<? extends Class<?>> subtypeClasses = Sets.newHashSet(ReflectionUtils.forNames(subtypesByName));
+                subtypesClassCache = new HashSet<>();
+                for (Class<?> c : subtypeClasses) {
+                    if (Modifier.isAbstract(c.getModifiers()) || Modifier.isInterface(c.getModifiers())) {
+                        //log.info("Skipping abstract/interface: {}",c);
+                        continue;
+                    }
+                    subtypesClassCache.add(c);
+                }
+            }
+        }
 
         //Second: get all currently registered subtypes for this mapper
         Set<Class<?>> registeredSubtypes = new HashSet<>();
-        for (Class<?> c : baseClasses) {
+        for (Class<?> c : classes) {
             AnnotatedClass ac = AnnotatedClass.construct(c, mapper.getSerializationConfig().getAnnotationIntrospector(), null);
             Collection<NamedType> types = mapper.getSubtypeResolver().collectAndResolveSubtypes(ac, mapper.getSerializationConfig(), mapper.getSerializationConfig().getAnnotationIntrospector());
             for (NamedType nt : types) {
@@ -367,7 +444,7 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
 
         //Third: register all _concrete_ subtypes that are not already registered
         List<NamedType> toRegister = new ArrayList<>();
-        for (Class<?> c : subtypeClasses) {
+        for (Class<?> c : subtypesClassCache) {
             //Check if it's concrete or abstract...
             if(Modifier.isAbstract(c.getModifiers()) || Modifier.isInterface(c.getModifiers())){
                 //log.info("Skipping abstract/interface: {}",c);
@@ -384,7 +461,7 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
                 }
                 toRegister.add(new NamedType(c, name));
                 if(log.isDebugEnabled()){
-                    for(Class<?> baseClass : baseClasses){
+                    for(Class<?> baseClass : classes){
                         if(baseClass.isAssignableFrom(c)){
                             log.debug("Registering class for JSON serialization: {} as subtype of {}",c.getName(),baseClass.getName());
                             break;
@@ -397,21 +474,9 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
         mapper.registerSubtypes(toRegister.toArray(new NamedType[toRegister.size()]));
     }
 
-    public Object[] getExtraArgs() {
-        if(layer == null || layer.getActivationFunction() == null) return new Object[0];
-        switch( layer.getActivationFunction()) {
-            case "leakyrelu" :
-                return new Object[] {leakyreluAlpha};
-            case "relu" :
-                return new Object[] { 0 };
-            default:
-                return new Object [] {};
-        }
-    }
-
     @Data
     public static class Builder implements Cloneable {
-        protected String activationFunction = "sigmoid";
+        protected IActivation activationFn = new ActivationSigmoid();
         protected WeightInit weightInit = WeightInit.XAVIER;
         protected double biasInit = 0.0;
         protected Distribution dist = null;
@@ -447,6 +512,9 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
         protected double lrPolicyDecayRate = Double.NaN;
         protected double lrPolicySteps = Double.NaN;
         protected double lrPolicyPower = Double.NaN;
+        protected boolean pretrain = false;
+
+        protected ConvolutionMode convolutionMode = ConvolutionMode.Truncate;
 
         /** Process input as minibatch vs full dataset.
          * Default set to true. */
@@ -600,11 +668,26 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
          * "relu" (rectified linear), "tanh", "sigmoid", "softmax",
          * "hardtanh", "leakyrelu", "maxout", "softsign", "softplus"
          */
+        @Deprecated
         public Builder activation(String activationFunction) {
-            this.activationFunction = activationFunction;
+            return activation(Activation.fromString(activationFunction).getActivationFunction());
+        }
+
+        /**Activation function / neuron non-linearity
+         * @see #activation(Activation)
+         */
+        public Builder activation(IActivation activationFunction) {
+            this.activationFn = activationFunction;
             return this;
         }
 
+        /**Activation function / neuron non-linearity
+         */
+        public Builder activation(Activation activation) {
+            return activation(activation.getActivationFunction());
+        }
+
+        @Deprecated
         public Builder leakyreluAlpha(double leakyreluAlpha) {
             this.leakyreluAlpha = leakyreluAlpha;
             return this;
@@ -616,7 +699,7 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
         public Builder weightInit(WeightInit weightInit) {
             this.weightInit = weightInit;
             return this;
-            }
+        }
 
         /**
          * Constant for bias initialization. Default: 0.0
@@ -725,7 +808,9 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
 
 
         /**
-         * Epsilon value for updaters: Adagrad and Adadelta.
+         * Epsilon value for updaters: Adam, RMSProp, Adagrad, Adadelta
+         * Default values: {@link Adam#DEFAULT_ADAM_EPSILON}, {@link RmsProp#DEFAULT_RMSPROP_EPSILON}, {@link AdaGrad#DEFAULT_ADAGRAD_EPSILON},
+         * {@link AdaDelta#DEFAULT_ADADELTA_EPSILON}
          *
          * @param epsilon    Epsilon value to use for adagrad or
          */
@@ -804,6 +889,11 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
             return this;
         }
 
+        public Builder convolutionMode(ConvolutionMode convolutionMode){
+            this.convolutionMode = convolutionMode;
+            return this;
+        }
+
         // VALIDATION SECTION //
         private void updaterValidation(String layerName){
             if ((!Double.isNaN(momentum) || !Double.isNaN(layer.getMomentum())) && layer.getUpdater() != Updater.NESTEROVS)
@@ -822,8 +912,8 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
             switch (layer.getUpdater()) {
                 case NESTEROVS:
                     if (Double.isNaN(momentum) && Double.isNaN(layer.getMomentum())) {
-                        layer.setMomentum(0.9);
-                        log.warn("Layer \"" + layerName + "\" momentum is automatically set to 0.9. Add momentum to configuration to change the value.");
+                        layer.setMomentum(Nesterovs.DEFAULT_NESTEROV_MOMENTUM);
+                        log.warn("Layer \"" + layerName + "\" momentum is automatically set to " + Nesterovs.DEFAULT_NESTEROV_MOMENTUM + ". Add momentum to configuration to change the value.");
                     }
                     else if (Double.isNaN(layer.getMomentum()))
                         layer.setMomentum(momentum);
@@ -834,44 +924,60 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
                     break;
                 case ADAM:
                     if (Double.isNaN(adamMeanDecay) && Double.isNaN(layer.getAdamMeanDecay())) {
-                        layer.setAdamMeanDecay(0.9);
-                        log.warn("Layer \"" + layerName + "\" adamMeanDecay is automatically set to 0.9. Add adamVarDecay to configuration to change the value.");
+                        layer.setAdamMeanDecay(Adam.DEFAULT_ADAM_BETA1_MEAN_DECAY);
+                        log.warn("Layer \"" + layerName + "\" adamMeanDecay is automatically set to " + Adam.DEFAULT_ADAM_BETA1_MEAN_DECAY + ". Add adamVarDecay to configuration to change the value.");
                     }
                     else if (Double.isNaN(layer.getAdamMeanDecay()))
                         layer.setAdamMeanDecay(adamMeanDecay);
+
                     if (Double.isNaN(adamVarDecay) && Double.isNaN(layer.getAdamVarDecay())) {
-                        layer.setAdamVarDecay(0.999);
-                        log.warn("Layer \"" + layerName + "\" adamVarDecay is automatically set to 0.999. Add adamVarDecay to configuration to change the value.");
+                        layer.setAdamVarDecay(Adam.DEFAULT_ADAM_BETA2_VAR_DECAY);
+                        log.warn("Layer \"" + layerName + "\" adamVarDecay is automatically set to " + Adam.DEFAULT_ADAM_BETA2_VAR_DECAY + ". Add adamVarDecay to configuration to change the value.");
                     }
                     else if (Double.isNaN(layer.getAdamVarDecay()))
                         layer.setAdamVarDecay(adamVarDecay);
+
+                    if (Double.isNaN(epsilon) && Double.isNaN(layer.getEpsilon())){
+                        layer.setEpsilon(Adam.DEFAULT_ADAM_EPSILON);
+                    } else if (Double.isNaN(layer.getEpsilon())) {
+                        layer.setEpsilon(epsilon);
+                    }
                     break;
                 case ADADELTA:
                     if (Double.isNaN(layer.getRho()))
                         layer.setRho(rho);
+
                     if (Double.isNaN(epsilon) && Double.isNaN(layer.getEpsilon())){
-                        layer.setEpsilon(1e-6);
-                        log.warn("Layer \"" + layerName + "\" AdaDelta epsilon is automatically set to 1e-6. Add epsilon to configuration to change the value.");
+                        layer.setEpsilon(AdaDelta.DEFAULT_ADADELTA_EPSILON);
+                        log.warn("Layer \"" + layerName + "\" AdaDelta epsilon is automatically set to " + AdaDelta.DEFAULT_ADADELTA_EPSILON + ". Add epsilon to configuration to change the value.");
                     } else if (Double.isNaN(layer.getEpsilon())) {
                         layer.setEpsilon(epsilon);
                     }
                     break;
                 case ADAGRAD:
                     if (Double.isNaN(epsilon) && Double.isNaN(layer.getEpsilon())){
-                        layer.setEpsilon(1e-6);
-                        //Do we warn here? When epsilon was not configurable, we didn't...
+                        layer.setEpsilon(AdaGrad.DEFAULT_ADAGRAD_EPSILON);
                     } else if (Double.isNaN(layer.getEpsilon())) {
                         layer.setEpsilon(epsilon);
                     }
                     break;
                 case RMSPROP:
                     if (Double.isNaN(rmsDecay) && Double.isNaN(layer.getRmsDecay())) {
-                        layer.setRmsDecay(0.95);
+                        layer.setRmsDecay(RmsProp.DEFAULT_RMSPROP_RMSDECAY);
                         log.warn("Layer \"" + layerName + "\" rmsDecay is automatically set to 0.95. Add rmsDecay to configuration to change the value.");
                     }
                     else if (Double.isNaN(layer.getRmsDecay()))
                         layer.setRmsDecay(rmsDecay);
+
+                    if (Double.isNaN(epsilon) && Double.isNaN(layer.getEpsilon())){
+                        layer.setEpsilon(RmsProp.DEFAULT_RMSPROP_EPSILON);
+                    } else if (Double.isNaN(layer.getEpsilon())) {
+                        layer.setEpsilon(epsilon);
+                    }
+
                     break;
+
+
             }
 
         }
@@ -888,7 +994,7 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
                 case Poly:
                     if (Double.isNaN(lrPolicyPower))
                         throw new IllegalStateException("Layer \"" + layerName + "\" learning rate policy power (lrPolicyPower) must be set to use " + learningRatePolicy);
-                        break;
+                    break;
                 case Step:
                 case Sigmoid:
                     if (Double.isNaN(lrPolicySteps))
@@ -926,9 +1032,9 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
                         layer.setL2(l2);
                 } else if (!useRegularization &&
                         ((!Double.isNaN(l1) && l1 > 0.0) ||
-                        (!Double.isNaN(layer.getL1()) && layer.getL1() > 0.0) ||
-                        (!Double.isNaN(l2) && l2 > 0.0) ||
-                        (!Double.isNaN(layer.getL2()) && layer.getL2() > 0.0)))
+                                (!Double.isNaN(layer.getL1()) && layer.getL1() > 0.0) ||
+                                (!Double.isNaN(l2) && l2 > 0.0) ||
+                                (!Double.isNaN(layer.getL2()) && layer.getL2() > 0.0)))
                     log.warn( "Layer \"" + layerName + "\" l1 or l2 has been added to configuration but useRegularization is set to false.");
                 if (Double.isNaN(l2) && Double.isNaN(layer.getL2()))
                     layer.setL2(0.0);
@@ -938,12 +1044,13 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
                     if (dist != null && layer.getDist() == null)
                         layer.setDist(dist);
                     else if (dist == null && layer.getDist() == null) {
-                        layer.setDist(new NormalDistribution(1e-3, 1));
+                        layer.setDist(new NormalDistribution(0, 1));
                         log.warn("Layer \"" + layerName + "\" distribution is automatically set to normalize distribution with mean 1e-3 and variance 1.");
                     }
                 } else if ((dist != null || layer.getDist() != null))
                     log.warn("Layer \"" + layerName + "\" distribution is set but will not be applied unless weight init is set to WeighInit.DISTRIBUTION.");
             }
+
         }
 
         ////////////////
@@ -970,6 +1077,7 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
             conf.lrPolicyDecayRate = lrPolicyDecayRate;
             conf.lrPolicySteps = lrPolicySteps;
             conf.lrPolicyPower = lrPolicyPower;
+            conf.pretrain = pretrain;
             String layerName;
             if(layer == null || layer.getLayerName() == null ) layerName = "Layer not named";
             else layerName = "Layer " + layer.getLayerName() ;
@@ -981,7 +1089,7 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
                 if (layer.getLearningRateSchedule() == null) layer.setLearningRateSchedule(learningRateSchedule);
                 if (Double.isNaN(layer.getL1())) layer.setL1(l1);
                 if (Double.isNaN(layer.getL2())) layer.setL2(l2);
-                if (layer.getActivationFunction() == null) layer.setActivationFunction(activationFunction);
+                if (layer.getActivationFn() == null) layer.setActivationFn(activationFn);
                 if (layer.getWeightInit() == null) layer.setWeightInit(weightInit);
                 if (Double.isNaN(layer.getBiasInit())) layer.setBiasInit(biasInit);
                 if (Double.isNaN(layer.getDropOut())) layer.setDropOut(dropOut);
@@ -990,7 +1098,18 @@ public class NeuralNetConfiguration implements Serializable,Cloneable {
                 if (layer.getGradientNormalization() == null) layer.setGradientNormalization(gradientNormalization);
                 if (Double.isNaN(layer.getGradientNormalizationThreshold()))
                     layer.setGradientNormalizationThreshold(gradientNormalizationThreshold);
-
+                if(layer instanceof ConvolutionLayer){
+                    ConvolutionLayer cl = (ConvolutionLayer)layer;
+                    if(cl.getConvolutionMode() == null){
+                        cl.setConvolutionMode(convolutionMode);
+                    }
+                }
+                if(layer instanceof SubsamplingLayer){
+                    SubsamplingLayer sl = (SubsamplingLayer)layer;
+                    if(sl.getConvolutionMode() == null){
+                        sl.setConvolutionMode(convolutionMode);
+                    }
+                }
             }
             generalValidation(layerName);
             return conf;

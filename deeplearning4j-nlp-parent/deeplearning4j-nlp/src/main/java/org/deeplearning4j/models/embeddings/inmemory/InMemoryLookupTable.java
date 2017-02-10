@@ -18,7 +18,6 @@
 
 package org.deeplearning4j.models.embeddings.inmemory;
 
-import org.nd4j.shade.jackson.jaxrs.json.JacksonJsonProvider;
 import com.google.common.util.concurrent.AtomicDouble;
 import lombok.Getter;
 import lombok.NonNull;
@@ -29,30 +28,24 @@ import org.deeplearning4j.models.sequencevectors.sequence.SequenceElement;
 import org.deeplearning4j.models.word2vec.Word2Vec;
 import org.deeplearning4j.models.word2vec.wordstore.VocabCache;
 import org.deeplearning4j.plot.BarnesHutTsne;
-import org.deeplearning4j.plot.dropwizard.ObjectMapperProvider;
 import org.deeplearning4j.ui.UiConnectionInfo;
 import org.nd4j.linalg.api.buffer.DataBuffer;
-import org.nd4j.linalg.api.buffer.FloatBuffer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.api.rng.Random;
+import org.nd4j.linalg.exception.ND4JIllegalStateException;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.learning.AdaGrad;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.ClientBuilder;
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.client.WebTarget;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URI;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-//import org.deeplearning4j.ui.UiServer;
 
 /**
  * Default word lookup table
@@ -74,6 +67,7 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
     protected INDArray table,syn1Neg;
     protected boolean useAdaGrad;
     protected double negative = 0;
+    protected boolean useHS = true;
     protected VocabCache<T> vocab;
     protected Map<Integer,INDArray> codes = new ConcurrentHashMap<>();
 
@@ -84,6 +78,12 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
     @Getter @Setter protected Long tableId;
 
     public InMemoryLookupTable() {}
+
+    public InMemoryLookupTable(VocabCache<T> vocab, int vectorLength, boolean useAdaGrad,
+                               double lr, Random gen, double negative, boolean useHS) {
+        this(vocab, vectorLength, useAdaGrad, lr, gen, negative);
+        this.useHS = useHS;
+    }
 
     public InMemoryLookupTable(VocabCache<T> vocab, int vectorLength, boolean useAdaGrad,
                                double lr, Random gen, double negative) {
@@ -135,11 +135,12 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
 //            INDArray randUnk = Nd4j.rand(1, vectorLength, rng).subi(0.5).divi(vectorLength);
 //            putVector(Word2Vec.UNK, randUnk);
         }
-        if(syn1 == null || reset)
+        if((syn1 == null || reset) && useHS) {
+            log.info("Initializing syn1...");
             syn1 = Nd4j.create(syn0.shape());
+        }
+
         initNegative();
-
-
     }
 
     private List<String> fitTnseAndGetLabels(final BarnesHutTsne tsne, final int numWords) {
@@ -198,23 +199,51 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
         try {
             final List<String> labels = fitTnseAndGetLabels(tsne, numWords);
             final INDArray reducedData = tsne.getData();
-            List<String> list = new ArrayList<>();
+            StringBuilder sb = new StringBuilder();
             for (int i = 0; i < reducedData.rows() && i < numWords; i++) {
                 String word = labels.get(i);
                 INDArray wordVector = reducedData.getRow(i);
                 for (int j = 0; j < wordVector.length(); j++) {
-                    list.add(wordVector.getDouble(j)+"");
+                    sb.append(String.valueOf(wordVector.getDouble(j))).append(",");
                 }
-                list.add(word);
+                sb.append(word);
             }
 
-            Client client = ClientBuilder.newClient().register(JacksonJsonProvider.class).register(new ObjectMapperProvider());
+            String address = connectionInfo.getFirstPart() + "/tsne/post/" + connectionInfo.getSessionId();
+//            System.out.println("ADDRESS: " + address);
+            URI uri = new URI(address);
 
-            WebTarget target = client.target(connectionInfo.getFirstPart()).path(connectionInfo.getSecondPart("api")).path("coords").queryParam("sid", connectionInfo.getSessionId());
+            HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0");
+//            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Content-Type", "multipart/form-data");
+            connection.setDoOutput(true);
 
-            Response resp = target.request(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON).post(Entity.entity(list,MediaType.APPLICATION_JSON));
+            DataOutputStream dos = new DataOutputStream(connection.getOutputStream());
+            dos.writeBytes(sb.toString());
+            dos.flush();
+            dos.close();
 
-            log.debug("{}",resp);
+            try {
+                int responseCode = connection.getResponseCode();
+                System.out.println("RESPONSE CODE: " + responseCode);
+
+                if (responseCode != 200) {
+                    BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                    String inputLine;
+                    StringBuilder response = new StringBuilder();
+
+                    while ((inputLine = in.readLine()) != null) {
+                        response.append(inputLine);
+                    }
+                    in.close();
+
+                    log.warn("Error posting to remote UI - received response code {}\tContent: {}", response, response.toString());
+                }
+            } catch (IOException e){
+                log.warn("Error posting to remote UI at {}", uri, e);
+            }
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -241,8 +270,8 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
     }
 
 
-    protected void initNegative() {
-        if(negative > 0) {
+    public synchronized void initNegative() {
+        if(negative > 0 && syn1Neg == null) {
             syn1Neg = Nd4j.zeros(syn0.shape());
             makeTable(Math.max(expTable.length, 100000),0.75);
         }
@@ -361,7 +390,6 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
         else
             Nd4j.getBlasWrapper().axpy(1.0f,neu1e,l1);
 
-
     }
 
     public boolean isUseAdaGrad() {
@@ -376,6 +404,10 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
         return negative;
     }
 
+    public void setUseHS(boolean useHS) {
+        this.useHS = useHS;
+    }
+
     public void setNegative(double negative) {
         this.negative = negative;
     }
@@ -386,70 +418,10 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
      * @param w1 the first word to iterate on
      * @param w2 the second word to iterate on
      */
+    @Deprecated
     @Override
     public  void iterate(T w1, T w2) {
-    /*
-        if(w2.getIndex() < 0)
-            return;
-        //current word vector
-        INDArray l1 = this.syn0.slice(w2.getIndex());
 
-        //error for current word and context
-        INDArray neu1e = Nd4j.create(vectorLength);
-
-
-
-
-        double alpha = this.lr.get();
-
-        for(int i = 0; i < w1.getCodeLength(); i++) {
-            int code = w1.getCodes().get(i);
-            int point = w1.getPoints().get(i);
-            if(point >= syn0.rows() || point < 0)
-                throw new IllegalStateException("Illegal point " + point);
-            //other word vector
-            INDArray syn1 = this.syn1.slice(point);
-
-
-            double dot = Nd4j.getBlasWrapper().dot(l1,syn1);
-
-            if(dot < -MAX_EXP || dot >= MAX_EXP)
-                continue;
-
-
-            int idx = (int) ((dot + MAX_EXP) * ((double) expTable.length / MAX_EXP / 2.0));
-            if(idx >= expTable.length)
-                continue;
-
-            //score
-            double f =  expTable[idx];
-            //gradient
-            double g = (1 - code - f) * (useAdaGrad ?  w1.getGradient(i, alpha) : alpha);
-
-            if(syn0.data().dataType() == DataBuffer.Type.DOUBLE) {
-                Nd4j.getBlasWrapper().axpy(g, syn1, neu1e);
-                Nd4j.getBlasWrapper().axpy(g, l1, syn1);
-            }
-            else {
-                Nd4j.getBlasWrapper().axpy((float) g, syn1, neu1e);
-                Nd4j.getBlasWrapper().axpy((float) g, l1, syn1);
-            }
-        }
-
-
-
-
-
-        if(syn0.data().dataType() == DataBuffer.Type.DOUBLE)
-            Nd4j.getBlasWrapper().level1().axpy(l1.length(), 1.0,neu1e,l1);
-
-        else
-            Nd4j.getBlasWrapper().level1().axpy(l1.length(), 1.0f, neu1e, l1);
-
-
-
-
-        */
     }
 
 
@@ -464,7 +436,7 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
 
     protected void makeTable(int tableSize,double power) {
         int vocabSize = syn0.rows();
-        table = Nd4j.create(new FloatBuffer(tableSize));
+        table = Nd4j.create(tableSize);
         double trainWordsPow = 0.0;
         for(String word : vocab.words()) {
             trainWordsPow += Math.pow(vocab.wordFrequency(word), power);
@@ -637,10 +609,15 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
         protected long seed = 123;
         protected double negative = 0;
         protected VocabCache<T> vocabCache;
+        protected boolean useHS = true;
 
 
 
 
+        public Builder<T> useHierarchicSoftmax(boolean reallyUse) {
+            this.useHS = reallyUse;
+            return this;
+        }
 
         public Builder<T> cache(@NonNull VocabCache<T> vocab) {
             this.vocabCache = vocab;
@@ -685,11 +662,11 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
 
 
 
-        public WeightLookupTable<T> build() {
+        public InMemoryLookupTable<T> build() {
             if(vocabCache == null)
                 throw new IllegalStateException("Vocab cache must be specified");
 
-            InMemoryLookupTable table = new InMemoryLookupTable(vocabCache,vectorLength,useAdaGrad,lr,gen,negative);
+            InMemoryLookupTable<T> table = new InMemoryLookupTable<>(vocabCache,vectorLength,useAdaGrad,lr,gen,negative, useHS);
             table.seed = seed;
 
             return table;
@@ -731,12 +708,27 @@ public class InMemoryLookupTable<T extends SequenceElement> implements WeightLoo
 
         this.resetWeights(true);
 
+        AtomicInteger cntHs = new AtomicInteger(0);
+        AtomicInteger cntNg = new AtomicInteger(0);
+
         if (srcTable.syn0.rows() > this.syn0.rows())
             throw new IllegalStateException("You can't consume lookupTable with built for larger vocabulary without updating your vocabulary first");
 
         for (int x = 0; x < srcTable.syn0.rows(); x++) {
-            this.syn0.putRow(x, srcTable.syn0.getRow(x).dup());
-            this.syn1.putRow(x, srcTable.syn1.getRow(x).dup());
+            this.syn0.putRow(x, srcTable.syn0.getRow(x));
+
+            if (this.syn1 != null && srcTable.syn1 != null)
+                this.syn1.putRow(x, srcTable.syn1.getRow(x));
+            else
+                if (cntHs.incrementAndGet() == 1) log.info("Skipping syn1 merge");
+
+            if (this.syn1Neg != null && srcTable.syn1Neg != null) {
+                this.syn1Neg.putRow(x, srcTable.syn1Neg.getRow(x));
+            } else
+                if (cntNg.incrementAndGet() == 1) log.info("Skipping syn1Neg merge");
+
+            if (cntHs.get() > 0 && cntNg.get() > 0)
+                throw new ND4JIllegalStateException("srcTable has no syn1/syn1neg");
         }
     }
 }

@@ -49,7 +49,7 @@ public class GravesLSTMParamInitializer implements ParamInitializer {
     public final static String INPUT_WEIGHT_KEY = DefaultParamInitializer.WEIGHT_KEY;
 
     @Override
-    public int numParams(NeuralNetConfiguration conf, boolean backprop) {
+    public int numParams(NeuralNetConfiguration conf) {
         org.deeplearning4j.nn.conf.layers.GravesLSTM layerConf =
                 (org.deeplearning4j.nn.conf.layers.GravesLSTM) conf.getLayer();
 
@@ -79,7 +79,7 @@ public class GravesLSTMParamInitializer implements ParamInitializer {
         conf.addVariable(RECURRENT_WEIGHT_KEY);
         conf.addVariable(BIAS_KEY);
 
-        int length = numParams(conf,true);
+        int length = numParams(conf);
         if(paramsView.length() != length) throw new IllegalStateException("Expected params view of length " + length + ", got length " + paramsView.length());
 
         int nParamsIn = nLast * (4*nL);
@@ -90,9 +90,14 @@ public class GravesLSTMParamInitializer implements ParamInitializer {
         INDArray biasView = paramsView.get(NDArrayIndex.point(0), NDArrayIndex.interval(nParamsIn+nParamsRecurrent, nParamsIn+nParamsRecurrent+nBias));
 
         if(initializeParams) {
-            params.put(INPUT_WEIGHT_KEY, WeightInitUtil.initWeights(nLast, 4 * nL, layerConf.getWeightInit(), dist, inputWeightView));
-            params.put(RECURRENT_WEIGHT_KEY, WeightInitUtil.initWeights(nL, 4 * nL + 3, layerConf.getWeightInit(), dist, recurrentWeightView));
-            biasView.put(new INDArrayIndex[]{NDArrayIndex.point(0), NDArrayIndex.interval(nL, 2 * nL)}, Nd4j.ones(1, nL).muli(forgetGateInit));   //Order: input, forget, output, input modulation, i.e., IFOG}
+            int fanIn = nL;
+            int fanOut = nLast + nL;
+            int[] inputWShape = new int[]{nLast, 4 * nL};
+            int[] recurrentWShape = new int[]{nL, 4 * nL + 3};
+
+            params.put(INPUT_WEIGHT_KEY, WeightInitUtil.initWeights(fanIn, fanOut, inputWShape, layerConf.getWeightInit(), dist, inputWeightView));
+            params.put(RECURRENT_WEIGHT_KEY, WeightInitUtil.initWeights(fanIn, fanOut, recurrentWShape, layerConf.getWeightInit(), dist, recurrentWeightView));
+            biasView.put(new INDArrayIndex[]{NDArrayIndex.point(0), NDArrayIndex.interval(nL, 2 * nL)}, Nd4j.valueArrayOf(1, nL, forgetGateInit));   //Order: input, forget, output, input modulation, i.e., IFOG}
             /*The above line initializes the forget gate biases to specified value.
              * See Sutskever PhD thesis, pg19:
              * "it is important for [the forget gate activations] to be approximately 1 at the early stages of learning,
@@ -118,7 +123,7 @@ public class GravesLSTMParamInitializer implements ParamInitializer {
         int nL = layerConf.getNOut();	//i.e., n neurons in this layer
         int nLast = layerConf.getNIn();	//i.e., n neurons in previous layer
 
-        int length = numParams(conf,true);
+        int length = numParams(conf);
         if(gradientView.length() != length) throw new IllegalStateException("Expected gradient view of length " + length + ", got length " + gradientView.length());
 
         int nParamsIn = nLast * (4*nL);

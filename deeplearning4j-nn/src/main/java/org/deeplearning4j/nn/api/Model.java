@@ -22,8 +22,10 @@ import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.optimize.api.ConvexOptimizer;
+import org.deeplearning4j.optimize.api.IterationListener;
 import org.nd4j.linalg.api.ndarray.INDArray;
 
+import java.util.Collection;
 import java.util.Map;
 
 /**
@@ -33,6 +35,19 @@ import java.util.Map;
  *
  */
 public interface Model {
+
+
+    /**
+     * Set the IterationListeners for the ComputationGraph (and all layers in the network)
+     */
+     void setListeners(Collection<IterationListener> listeners);
+
+
+    /**
+     * Set the IterationListeners for the ComputationGraph (and all layers in the network)
+     */
+    void setListeners(IterationListener...listeners);
+
 
     /**
      * All models have a fit method
@@ -204,6 +219,14 @@ public interface Model {
     Map<String,INDArray> paramTable();
 
     /**
+     * Table of parameters by key, for backprop
+     * For many models (dense layers, etc) - all parameters are backprop parameters
+     * @param backpropParamsOnly If true, return backprop params only. If false: return all params (equivalent to
+     *                           paramsTable())
+     */
+    Map<String,INDArray> paramTable(boolean backpropParamsOnly);
+
+    /**
      * Setter for the param table
      * @param paramTable
      */
@@ -221,6 +244,4 @@ public interface Model {
      * Clear input
      */
     void clear();
-
-
 }

@@ -20,6 +20,7 @@ package org.deeplearning4j.nn.graph.vertex.impl.rnn;
 
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.api.MaskState;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.graph.ComputationGraph;
 import org.deeplearning4j.nn.graph.vertex.BaseGraphVertex;
@@ -89,12 +90,21 @@ public class DuplicateToTimeSeriesVertex extends BaseGraphVertex {
     @Override
     public Pair<Gradient, INDArray[]> doBackward(boolean tbptt) {
         //Because we duplicated for each time step: simply need to sum along time for errors/epsilons
-        return new Pair<>(null,new INDArray[]{epsilons[0].sum(2)});
+        return new Pair<>(null,new INDArray[]{epsilon.sum(2)});
     }
 
     @Override
     public void setBackpropGradientsViewArray(INDArray backpropGradientsViewArray) {
         if(backpropGradientsViewArray != null) throw new RuntimeException("Vertex does not have gradients; gradients view array cannot be set here");
+    }
+
+    @Override
+    public Pair<INDArray, MaskState> feedForwardMaskArrays(INDArray[] maskArrays, MaskState currentMaskState, int minibatchSize) {
+
+        //Complication here: we want to take into account the masks for the time series that we are matching the length of...
+
+
+        throw new UnsupportedOperationException("Not yet implemented");
     }
 
     @Override

@@ -51,7 +51,7 @@ public class WordVectorsImpl<T extends SequenceElement> implements WordVectors {
     @Getter protected int minWordFrequency = 5;
     @Getter protected WeightLookupTable<T> lookupTable;
     @Getter protected VocabCache<T> vocab;
-    @Getter protected int layerSize = 100;
+    protected int layerSize = 100;
     @Getter protected transient ModelUtils<T> modelUtils = new BasicModelUtils<>();
     private boolean initDone = false;
 
@@ -74,10 +74,21 @@ public class WordVectorsImpl<T extends SequenceElement> implements WordVectors {
     protected int[] variableWindows;
 
 
+    /**
+     * This method returns word vector size
+     *
+     * @return
+     */
+    public int getLayerSize() {
+        if (lookupTable != null && lookupTable.getWeights() != null) {
+            return lookupTable.getWeights().columns();
+        } else return layerSize;
+    }
+
     public final static String DEFAULT_UNK = "UNK";
     @Getter @Setter private String UNK = DEFAULT_UNK;
 
-    @Getter protected List<String> stopWords = new ArrayList<>(); //StopWords.getStopWords();
+    @Getter protected Collection<String> stopWords = new ArrayList<>(); //StopWords.getStopWords();
     /**
      * Returns true if the model has this word in the vocab
      * @param word the word to test for
@@ -162,10 +173,10 @@ public class WordVectorsImpl<T extends SequenceElement> implements WordVectors {
      * @return the ndarray for this word
      */
     public double[] getWordVector(String word) {
-        int i = vocab().indexOf(word);
-        if(i < 0)
+        INDArray r = getWordVectorMatrix(word);
+        if (r == null)
             return null;
-        return lookupTable.vector(word).dup().data().asDouble();
+        return r.dup().data().asDouble();
     }
 
     /**
@@ -174,11 +185,10 @@ public class WordVectorsImpl<T extends SequenceElement> implements WordVectors {
      * @return the looked up matrix
      */
     public INDArray getWordVectorMatrixNormalized(String word) {
-        int i = vocab().indexOf(word);
-
-        if(i < 0)
+        INDArray r =  getWordVectorMatrix(word);
+        if (r == null)
             return null;
-        INDArray r =  lookupTable().vector(word);
+
         return r.div(Nd4j.getBlasWrapper().nrm2(r));
     }
 
@@ -218,7 +228,9 @@ public class WordVectorsImpl<T extends SequenceElement> implements WordVectors {
             cnt++;
         }
 
-        indexes = ArrayUtils.removeElement(indexes, -1);
+        while(ArrayUtils.contains(indexes, -1)) {
+            indexes = ArrayUtils.removeElement(indexes, -1);
+        }
 
         INDArray result = Nd4j.pullRows(lookupTable.getWeights(), 1, indexes);
         return result;

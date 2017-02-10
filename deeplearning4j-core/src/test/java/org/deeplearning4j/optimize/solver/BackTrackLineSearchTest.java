@@ -153,7 +153,7 @@ public class BackTrackLineSearchTest {
                         .build())
                 .build();
 
-        int numParams = conf.getLayer().initializer().numParams(conf,true);
+        int numParams = conf.getLayer().initializer().numParams(conf);
         INDArray params = Nd4j.create(1, numParams);
         return (OutputLayer)conf.getLayer().instantiate(conf, null, 0, params, true);
     }
@@ -212,7 +212,7 @@ public class BackTrackLineSearchTest {
 
     }
 
-    @Test(expected=UnsupportedOperationException.class)
+    @Test(expected=Exception.class)
     public void testBackTrackLineHessian() {
         OptimizationAlgorithm optimizer = OptimizationAlgorithm.HESSIAN_FREE;
         DataSet data = irisIter.next();
@@ -232,7 +232,7 @@ public class BackTrackLineSearchTest {
                 .optimizationAlgo(optimizer)
                 .iterations(iterations)
                 .miniBatch(false).momentum(0.9)
-                .learningRate(0.1).updater(Updater.NESTEROVS)
+                .learningRate(0.01).updater(Updater.NESTEROVS)
                 .seed(12345L)
                 .list()
                 .layer(0, new DenseLayer.Builder()

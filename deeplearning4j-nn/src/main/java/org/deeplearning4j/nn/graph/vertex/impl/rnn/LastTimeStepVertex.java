@@ -20,6 +20,7 @@ package org.deeplearning4j.nn.graph.vertex.impl.rnn;
 
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.api.MaskState;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.graph.ComputationGraph;
 import org.deeplearning4j.nn.graph.vertex.BaseGraphVertex;
@@ -125,12 +126,12 @@ public class LastTimeStepVertex extends BaseGraphVertex {
         if(fwdPassTimeSteps == null){
             //Last time step for all examples
             epsilonsOut.put(new INDArrayIndex[]{NDArrayIndex.all(),NDArrayIndex.all(),NDArrayIndex.point(fwdPassShape[2]-1)},
-                    epsilons[0]);
+                    epsilon);
         } else {
             //Different time steps were extracted for each example
             for( int i=0; i<fwdPassTimeSteps.length; i++ ){
                 epsilonsOut.put(new INDArrayIndex[]{NDArrayIndex.point(i),NDArrayIndex.all(),
-                        NDArrayIndex.point(fwdPassTimeSteps[i])}, epsilons[0].getRow(i));
+                        NDArrayIndex.point(fwdPassTimeSteps[i])}, epsilon.getRow(i));
             }
         }
         return new Pair<>(null,new INDArray[]{epsilonsOut});
@@ -139,6 +140,13 @@ public class LastTimeStepVertex extends BaseGraphVertex {
     @Override
     public void setBackpropGradientsViewArray(INDArray backpropGradientsViewArray) {
         if(backpropGradientsViewArray != null) throw new RuntimeException("Vertex does not have gradients; gradients view array cannot be set here");
+    }
+
+    @Override
+    public Pair<INDArray, MaskState> feedForwardMaskArrays(INDArray[] maskArrays, MaskState currentMaskState, int minibatchSize) {
+        //Input: 2d mask array, for masking a time series. After extracting out the last time step, we no longer need the mask array
+
+        return new Pair<>(null, currentMaskState);
     }
 
     @Override

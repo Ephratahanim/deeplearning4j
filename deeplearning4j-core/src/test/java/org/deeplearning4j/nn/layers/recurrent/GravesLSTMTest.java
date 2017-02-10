@@ -43,7 +43,7 @@ public class GravesLSTMTest {
 						.build())
 				.build();
 
-		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		int numParams = conf.getLayer().initializer().numParams(conf);
 		INDArray params = Nd4j.create(1, numParams);
 		GravesLSTM layer = (GravesLSTM)conf.getLayer().instantiate(conf,null,0,params,true);
 		
@@ -91,10 +91,10 @@ public class GravesLSTMTest {
 						.build())
 				.build();
 
-		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		int numParams = conf.getLayer().initializer().numParams(conf);
 		INDArray params = Nd4j.create(1, numParams);
 		GravesLSTM lstm = (GravesLSTM)conf.getLayer().instantiate(conf,null,0,params,true);
-		lstm.setBackpropGradientsViewArray(Nd4j.create(1, conf.getLayer().initializer().numParams(conf,true)));
+		lstm.setBackpropGradientsViewArray(Nd4j.create(1, conf.getLayer().initializer().numParams(conf)));
 		//Set input, do a forward pass:
 		lstm.activate(inputData);
 		assertNotNull(lstm.input());
@@ -144,7 +144,7 @@ public class GravesLSTMTest {
 				.build())
 		.build();
 
-		int numParams = conf.getLayer().initializer().numParams(conf,true);
+		int numParams = conf.getLayer().initializer().numParams(conf);
 		INDArray params = Nd4j.create(1, numParams);
 		GravesLSTM lstm = (GravesLSTM)conf.getLayer().instantiate(conf,null,0,params,true);
 		INDArray input = Nd4j.rand(new int[]{miniBatchSize, nIn, timeSeriesLength});
@@ -228,6 +228,34 @@ public class GravesLSTMTest {
 			double d1 = out1.getDouble(i);
 			double d2 = out2.getDouble(i);
 			assertEquals(d1,d2,0.0);
+		}
+	}
+
+
+	@Test
+	public void testGateActivationFnsSanityCheck(){
+		for(String gateAfn : new String[]{"sigmoid", "hardsigmoid"}){
+
+			MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
+					.optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT).iterations(1)
+					.seed(12345)
+					.list()
+					.layer(0, new org.deeplearning4j.nn.conf.layers.GravesLSTM.Builder()
+							.gateActivationFunction(gateAfn)
+							.activation("tanh").nIn(2).nOut(2).build())
+					.layer(1, new org.deeplearning4j.nn.conf.layers.RnnOutputLayer.Builder().lossFunction(LossFunctions.LossFunction.MSE)
+							.nIn(2).nOut(2).activation("tanh").build())
+					.build();
+
+			MultiLayerNetwork net = new MultiLayerNetwork(conf);
+			net.init();
+
+			assertEquals(gateAfn, ((org.deeplearning4j.nn.conf.layers.GravesLSTM)net.getLayer(0).conf().getLayer()).getGateActivationFn().toString());
+
+			INDArray in = Nd4j.rand(new int[]{3,2,5});
+			INDArray labels = Nd4j.rand(new int[]{3,2,5});
+
+			net.fit(in, labels);
 		}
 	}
 }

@@ -21,6 +21,8 @@ package org.deeplearning4j.nn.graph.vertex.impl;
 import lombok.Data;
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.api.MaskState;
+import org.deeplearning4j.nn.api.layers.IOutputLayer;
 import org.deeplearning4j.nn.api.layers.RecurrentLayer;
 import org.deeplearning4j.nn.conf.InputPreProcessor;
 import org.deeplearning4j.nn.gradient.Gradient;
@@ -29,10 +31,13 @@ import org.deeplearning4j.nn.graph.vertex.BaseGraphVertex;
 import org.deeplearning4j.nn.graph.vertex.VertexIndices;
 import org.deeplearning4j.nn.layers.BaseOutputLayer;
 import org.nd4j.linalg.api.ndarray.INDArray;
+import org.nd4j.linalg.ops.transforms.Transforms;
 
 import java.util.Arrays;
 
-/** * LayerVertex is a GraphVertex with a neural network Layer (and, optionally an {@link InputPreProcessor}) in it
+/**
+ * LayerVertex is a GraphVertex with a neural network Layer (and, optionally an {@link InputPreProcessor}) in it
+ *
  * @author Alex Black
  */
 @Data
@@ -45,14 +50,16 @@ public class LayerVertex extends BaseGraphVertex {
     // passed in externally
     private final boolean outputVertex;
 
-    /** Create a network input vertex: */
-    public LayerVertex(ComputationGraph graph, String name, int vertexIndex, Layer layer, InputPreProcessor layerPreProcessor, boolean outputVertex){
+    /**
+     * Create a network input vertex:
+     */
+    public LayerVertex(ComputationGraph graph, String name, int vertexIndex, Layer layer, InputPreProcessor layerPreProcessor, boolean outputVertex) {
         this(graph, name, vertexIndex, null, null, layer, layerPreProcessor, outputVertex);
     }
 
     public LayerVertex(ComputationGraph graph, String name, int vertexIndex, VertexIndices[] inputVertices, VertexIndices[] outputVertices,
-                        Layer layer, InputPreProcessor layerPreProcessor, boolean outputVertex){
-        super(graph,name,vertexIndex,inputVertices,outputVertices);
+                       Layer layer, InputPreProcessor layerPreProcessor, boolean outputVertex) {
+        super(graph, name, vertexIndex, inputVertices, outputVertices);
         this.graph = graph;
         this.vertexName = name;
         this.vertexIndex = vertexIndex;
@@ -63,60 +70,49 @@ public class LayerVertex extends BaseGraphVertex {
         this.outputVertex = outputVertex;
 
         this.inputs = new INDArray[(inputVertices != null ? inputVertices.length : 0)];
-        this.epsilons = new INDArray[(outputVertices != null ? outputVertices.length : 0)];
     }
 
     @Override
-    public boolean hasLayer(){
+    public boolean hasLayer() {
         return true;
     }
 
     @Override
-    public boolean isOutputVertex(){
+    public boolean isOutputVertex() {
         return outputVertex || layer instanceof BaseOutputLayer;
     }
 
     @Override
-    public Layer getLayer(){
+    public Layer getLayer() {
         return layer;
     }
 
     @Override
-    public INDArray doForward(boolean training){
-        if(!canDoForward()) throw new IllegalStateException("Cannot do forward pass: all inputs not set");
+    public INDArray doForward(boolean training) {
+        if (!canDoForward()) throw new IllegalStateException("Cannot do forward pass: all inputs not set");
 
         return layer.activate(training);
     }
 
     @Override
-    public Pair<Gradient,INDArray[]> doBackward(boolean tbptt){
-        if(!canDoBackward()){
-            throw new IllegalStateException("Cannot do backward pass: all epsilons not set");
+    public Pair<Gradient, INDArray[]> doBackward(boolean tbptt) {
+        if (!canDoBackward()) {
+            throw new IllegalStateException("Cannot do backward pass: all epsilons not set. Layer "+vertexName+" (idx "+vertexIndex+") numInputs "+
+                getNumInputArrays()+"; numOutputs "+getNumOutputConnections());
         }
 
-        INDArray epsTotal = null;
-        if(epsilons != null && epsilons.length == 1 ) epsTotal = epsilons[0];
-        else if(epsilons != null && epsilons.length > 1 ){
-            //TODO: check the math on this... I think it's correct though
-            //This is the "output connected to multiple other layers" case
-            epsTotal = epsilons[0].dup();
-            for( int i=1; i<epsilons.length; i++ ){
-                epsTotal.addi(epsilons[i]);
-            }
-        }
-
-        Pair<Gradient,INDArray> pair;
-        if(tbptt && layer instanceof RecurrentLayer){
+        Pair<Gradient, INDArray> pair;
+        if (tbptt && layer instanceof RecurrentLayer) {
             //Truncated BPTT for recurrent layers
-            pair = ((RecurrentLayer)layer).tbpttBackpropGradient(epsTotal, graph.getConfiguration().getTbpttBackLength());
+            pair = ((RecurrentLayer) layer).tbpttBackpropGradient(epsilon, graph.getConfiguration().getTbpttBackLength());
         } else {
             //Normal backprop
-            pair = layer.backpropGradient(epsTotal);    //epsTotal may be null for OutputLayers
+            pair = layer.backpropGradient(epsilon);    //epsTotal may be null for OutputLayers
         }
 
-        if(layerPreProcessor != null){
+        if (layerPreProcessor != null) {
             INDArray eps = pair.getSecond();
-            eps = layerPreProcessor.backprop(eps,graph.batchSize());
+            eps = layerPreProcessor.backprop(eps, graph.batchSize());
             pair.setSecond(eps);
         }
 
@@ -125,12 +121,13 @@ public class LayerVertex extends BaseGraphVertex {
     }
 
     @Override
-    public void setInput(int inputNumber, INDArray input){
-        if(inputNumber > 0) throw new IllegalArgumentException("Invalid input number: LayerVertex instances have only ");
+    public void setInput(int inputNumber, INDArray input) {
+        if (inputNumber > 0)
+            throw new IllegalArgumentException("Invalid input number: LayerVertex instances have only 1 input (got inputNumber = " + inputNumber + ")");
         inputs[inputNumber] = input;
 
         INDArray currInput = inputs[0];
-        if(layerPreProcessor != null){
+        if (layerPreProcessor != null) {
             currInput = layerPreProcessor.preProcess(currInput, graph.batchSize());
         }
         layer.setInput(currInput);
@@ -141,9 +138,29 @@ public class LayerVertex extends BaseGraphVertex {
         layer.setBackpropGradientsViewArray(backpropGradientsViewArray);
     }
 
+    @Override
+    public Pair<INDArray, MaskState> feedForwardMaskArrays(INDArray[] maskArrays, MaskState currentMaskState, int minibatchSize) {
+        if(maskArrays == null || maskArrays.length == 0){
+            return new Pair<>(null, currentMaskState);
+        }
+
+        if(layerPreProcessor != null ){
+            Pair<INDArray,MaskState> pair = layerPreProcessor.feedForwardMaskArray(maskArrays[0], currentMaskState, minibatchSize);
+            if(pair == null){
+                maskArrays[0] = null;
+                currentMaskState = null;
+            } else {
+                maskArrays[0] = pair.getFirst();
+                currentMaskState = pair.getSecond();
+            }
+        }
+
+        return layer.feedForwardMaskArray(maskArrays[0], currentMaskState, minibatchSize);
+    }
+
 
     @Override
-    public String toString(){
+    public String toString() {
         StringBuilder sb = new StringBuilder();
         sb.append("LayerVertex(id=").append(vertexIndex).append(",name=\"").append(vertexName)
                 .append("\",inputs=").append(Arrays.toString(inputVertices)).append(",outputs=").append(Arrays.toString(outputVertices))
@@ -152,8 +169,8 @@ public class LayerVertex extends BaseGraphVertex {
     }
 
     @Override
-    public boolean canDoBackward(){
-        if(!isOutputVertex()) return super.canDoBackward();
+    public boolean canDoBackward() {
+        if (!isOutputVertex()) return super.canDoBackward();
 
         for (INDArray input : inputs) {
             if (input == null) {
@@ -161,11 +178,9 @@ public class LayerVertex extends BaseGraphVertex {
             }
         }
 
-        if(!(layer instanceof BaseOutputLayer)){
-            for (INDArray epsilon : epsilons) {
-                if (epsilon == null) {
-                    return false;
-                }
+        if (!(layer instanceof IOutputLayer)) {
+            if (epsilon == null) {
+                return false;
             }
         }
 

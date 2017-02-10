@@ -20,11 +20,6 @@
 
 package org.deeplearning4j.nn.conf;
 
-import org.nd4j.shade.jackson.core.JsonFactory;
-import org.nd4j.shade.jackson.core.JsonParser;
-import org.nd4j.shade.jackson.databind.JsonNode;
-import org.nd4j.shade.jackson.databind.ObjectMapper;
-import org.nd4j.shade.jackson.databind.node.ArrayNode;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -33,14 +28,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.deeplearning4j.nn.conf.inputs.InputType;
 import org.deeplearning4j.nn.conf.layers.*;
 import org.deeplearning4j.nn.conf.layers.setup.ConvolutionLayerSetup;
-import org.deeplearning4j.nn.conf.preprocessor.FeedForwardToRnnPreProcessor;
-import org.deeplearning4j.nn.conf.preprocessor.RnnToFeedForwardPreProcessor;
+import org.nd4j.linalg.activations.Activation;
+import org.nd4j.linalg.activations.IActivation;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.nd4j.linalg.lossfunctions.impl.LossBinaryXENT;
 import org.nd4j.linalg.lossfunctions.impl.LossMCXENT;
 import org.nd4j.linalg.lossfunctions.impl.LossMSE;
 import org.nd4j.linalg.lossfunctions.impl.LossNegativeLogLikelihood;
+import org.nd4j.shade.jackson.databind.JsonNode;
+import org.nd4j.shade.jackson.databind.ObjectMapper;
+import org.nd4j.shade.jackson.databind.node.ArrayNode;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -48,6 +46,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Configuration for a multi layer network
@@ -61,12 +60,17 @@ import java.util.Map;
 public class MultiLayerConfiguration implements Serializable, Cloneable {
 
     protected List<NeuralNetConfiguration> confs;
-    protected boolean pretrain = true;
     protected Map<Integer,InputPreProcessor> inputPreProcessors = new HashMap<>();
-    protected boolean backprop = false;
+    protected boolean pretrain = false;
+    protected boolean backprop = true;
     protected BackpropType backpropType = BackpropType.Standard;
     protected int tbpttFwdLength = 20;
     protected int tbpttBackLength = 20;
+
+    //Counter for the number of parameter updates so far
+    // This is important for learning rate schedules, for example, and is stored here to ensure it is persisted
+    // for Spark and model serialization
+    protected int iterationCount = 0;
 
     /**
      *
@@ -129,6 +133,7 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
         // Previously: enumeration used for loss functions. Now: use classes
         // IN the past, could have only been an OutputLayer or RnnOutputLayer using these enums
         int layerCount = 0;
+        JsonNode confs = null;
         for(NeuralNetConfiguration nnc : conf.getConfs()){
             Layer l = nnc.getLayer();
             if(l instanceof BaseOutputLayer && ((BaseOutputLayer)l).getLossFn() == null){
@@ -138,7 +143,9 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
                 BaseOutputLayer ol = (BaseOutputLayer)l;
                 try{
                     JsonNode jsonNode = mapper.readTree(json);
-                    JsonNode confs = jsonNode.get("confs");
+                    if(confs == null) {
+                        confs = jsonNode.get("confs");
+                    }
                     if(confs instanceof ArrayNode){
                         ArrayNode layerConfs = (ArrayNode)confs;
                         JsonNode outputLayerNNCNode = layerConfs.get(layerCount);
@@ -188,15 +195,49 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
                                 }
                             }
                         }
+
                     } else {
                         log.warn("OutputLayer with null LossFunction or pre-0.6.0 loss function configuration detected: could not parse JSON: layer 'confs' field is not an ArrayNode (is: {})",
-                                (confs != null ? confs.getClass() : null));
+                            (confs != null ? confs.getClass() : null));
                     }
                 } catch(IOException e){
                     log.warn("OutputLayer with null LossFunction or pre-0.6.0 loss function configuration detected: could not parse JSON",e);
                     break;
                 }
             }
+
+            //Also, pre 0.7.2: activation functions were Strings ("activationFunction" field), not classes ("activationFn")
+            //Try to load the old format if necessary, and create the appropriate IActivation instance
+            if(l.getActivationFn() == null){
+                try {
+                    JsonNode jsonNode = mapper.readTree(json);
+                    if(confs == null) {
+                        confs = jsonNode.get("confs");
+                    }
+                    if (confs instanceof ArrayNode) {
+                        ArrayNode layerConfs = (ArrayNode)confs;
+                        JsonNode outputLayerNNCNode = layerConfs.get(layerCount);
+                        if(outputLayerNNCNode == null) return conf; //Should never happen...
+                        JsonNode layerWrapperNode = outputLayerNNCNode.get("layer");
+
+                        if(layerWrapperNode == null || layerWrapperNode.size() != 1){
+                            continue;
+                        }
+
+                        JsonNode layerNode = layerWrapperNode.elements().next();
+                        JsonNode activationFunction = layerNode.get("activationFunction");      //Should only have 1 element: "dense", "output", etc
+
+                        if(activationFunction != null){
+                            IActivation ia = Activation.fromString(activationFunction.asText()).getActivationFunction();
+                            l.setActivationFn(ia);
+                        }
+                    }
+
+                } catch (IOException e){
+                    log.warn("Layer with null ActivationFn field or pre-0.7.2 activation function detected: could not parse JSON",e);
+                }
+            }
+
             layerCount++;
         }
         return conf;
@@ -207,12 +248,9 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
         return toJson();
     }
 
-
-
     public NeuralNetConfiguration getConf(int i) {
         return confs.get(i);
     }
-
 
     @Override
     public MultiLayerConfiguration clone() {
@@ -250,10 +288,10 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
     public static class Builder {
 
         protected List<NeuralNetConfiguration> confs = new ArrayList<>();
-        protected boolean pretrain = true;
         protected double dampingFactor = 100;
         protected Map<Integer,InputPreProcessor> inputPreProcessors = new HashMap<>();
-        protected boolean backprop = false;
+        protected boolean pretrain = false;
+        protected boolean backprop = true;
         protected BackpropType backpropType = BackpropType.Standard;
         protected int tbpttFwdLength = 20;
         protected int tbpttBackLength = 20;
@@ -287,16 +325,16 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
             this.backprop = backprop;
             return this;
         }
-        
+
         /**The type of backprop. Default setting is used for most networks (MLP, CNN etc),
          * but optionally truncated BPTT can be used for training recurrent neural networks.
          * If using TruncatedBPTT make sure you set both tBPTTForwardLength() and tBPTTBackwardLength()
          */
         public Builder backpropType(BackpropType type){
-        	this.backpropType = type;
-        	return this;
+            this.backpropType = type;
+            return this;
         }
-        
+
         /**When doing truncated BPTT: how many steps of forward pass should we do
          * before doing (truncated) backprop?<br>
          * Only applicable when doing backpropType(BackpropType.TruncatedBPTT)<br>
@@ -308,10 +346,10 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
          * @param forwardLength Forward length > 0, >= backwardLength
          */
         public Builder tBPTTForwardLength(int forwardLength){
-        	this.tbpttFwdLength = forwardLength;
-        	return this;
+            this.tbpttFwdLength = forwardLength;
+            return this;
         }
-        
+
         /**When doing truncated BPTT: how many steps of backward should we do?<br>
          * Only applicable when doing backpropType(BackpropType.TruncatedBPTT)<br>
          * This is the k2 parameter on pg23 of
@@ -319,8 +357,8 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
          * @param backwardLength <= forwardLength
          */
         public Builder tBPTTBackwardLength(int backwardLength){
-        	this.tbpttBackLength = backwardLength;
-        	return this;
+            this.tbpttBackLength = backwardLength;
+            return this;
         }
 
         /**
@@ -377,32 +415,33 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
         }
 
         public MultiLayerConfiguration build() {
-            if(cnnInputSize != null){
-                new ConvolutionLayerSetup(this,cnnInputSize[0],cnnInputSize[1],cnnInputSize[2]);
-            } else if(inputType == null && inputPreProcessors.get(0) == null){
+            if (cnnInputSize != null) {
+                new ConvolutionLayerSetup(this, cnnInputSize[0], cnnInputSize[1], cnnInputSize[2]);
+            } else if (inputType == null && inputPreProcessors.get(0) == null) {
                 //User hasn't set the InputType. Sometimes we can infer it...
                 // For example, Dense/RNN layers, where preprocessor isn't set -> user is *probably* going to feed in
                 // standard feedforward or RNN data
                 //This isn't the most elegant implementation, but should avoid breaking backward compatibility here
                 //Can't infer InputType for CNN layers, however (don't know image dimensions/depth)
                 Layer firstLayer = confs.get(0).getLayer();
-                if(firstLayer instanceof BaseRecurrentLayer){
-                    BaseRecurrentLayer brl = (BaseRecurrentLayer)firstLayer;
+                if (firstLayer instanceof BaseRecurrentLayer) {
+                    BaseRecurrentLayer brl = (BaseRecurrentLayer) firstLayer;
                     int nIn = brl.getNIn();
-                    if(nIn > 0){
+                    if (nIn > 0) {
                         inputType = InputType.recurrent(nIn);
                     }
-                } else if( firstLayer instanceof DenseLayer ||
-                        firstLayer instanceof EmbeddingLayer ||
-                        firstLayer instanceof OutputLayer ){
+                } else if (firstLayer instanceof DenseLayer ||
+                    firstLayer instanceof EmbeddingLayer ||
+                    firstLayer instanceof OutputLayer) {
                     //Can't just use "instanceof FeedForwardLayer" here. ConvolutionLayer is also a FeedForwardLayer
-                    FeedForwardLayer ffl = (FeedForwardLayer)firstLayer;
+                    FeedForwardLayer ffl = (FeedForwardLayer) firstLayer;
                     int nIn = ffl.getNIn();
-                    if(nIn > 0){
+                    if (nIn > 0) {
                         inputType = InputType.feedForward(nIn);
                     }
                 }
             }
+
 
             //Add preprocessors and set nIns, if InputType has been set
             // Builder.inputType field can be set in 1 of 4 ways:
@@ -410,29 +449,35 @@ public class MultiLayerConfiguration implements Serializable, Cloneable {
             // 2. Via ConvolutionLayerSetup -> internally calls setInputType(InputType.convolutional(...))
             // 3. User calls one of  the two cnnInputSize methods -> sets inputType field directly
             // 4. Via the above code: i.e., assume input is as expected  by the RNN or dense layer -> sets the inputType field
-
-            if(inputType != null){
+            if (inputType != null) {
                 InputType currentInputType = inputType;
-                for( int i=0; i<confs.size(); i++){
+                for (int i = 0; i < confs.size(); i++) {
                     Layer l = confs.get(i).getLayer();
-                    if(inputPreProcessors.get(i) == null){
+                    if (inputPreProcessors.get(i) == null) {
                         //Don't override preprocessor setting, but set preprocessor if required...
                         InputPreProcessor inputPreProcessor = l.getPreProcessorForInputType(currentInputType);
-                        if(inputPreProcessor != null){
+                        if (inputPreProcessor != null) {
                             inputPreProcessors.put(i, inputPreProcessor);
                         }
                     }
 
                     InputPreProcessor inputPreProcessor = inputPreProcessors.get(i);
-                    if(inputPreProcessor != null){
+                    if (inputPreProcessor != null) {
                         currentInputType = inputPreProcessor.getOutputType(currentInputType);
                     }
                     l.setNIn(currentInputType, false);  //Don't override the nIn setting, if it's manually set by the user
 
-                    currentInputType = l.getOutputType(currentInputType);
+                    currentInputType = l.getOutputType(i, currentInputType);
+                }
+
+            }
+            // Sets pretrain on the layer to track update for that specific layer
+            if (isPretrain()) {
+                for (int j = 0; j < confs.size(); j++) {
+                    Layer l = confs.get(j).getLayer();
+                    if (l instanceof BasePretrainNetwork) confs.get(j).setPretrain(pretrain);
                 }
             }
-
 
             MultiLayerConfiguration conf = new MultiLayerConfiguration();
             conf.confs = this.confs;

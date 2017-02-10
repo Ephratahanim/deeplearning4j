@@ -1,5 +1,10 @@
 package org.deeplearning4j.spark.impl.paramavg;
 
+import lombok.extern.slf4j.Slf4j;
+import org.deeplearning4j.api.storage.*;
+import org.deeplearning4j.nn.conf.ComputationGraphConfiguration;
+import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
+import org.deeplearning4j.spark.impl.listeners.VanillaStatsStorageRouterProvider;
 import org.nd4j.shade.jackson.annotation.JsonAutoDetect;
 import org.nd4j.shade.jackson.annotation.JsonIgnoreProperties;
 import org.nd4j.shade.jackson.annotation.PropertyAccessor;
@@ -41,7 +46,7 @@ import org.deeplearning4j.spark.impl.paramavg.aggregator.ParameterAveragingEleme
 import org.deeplearning4j.spark.impl.paramavg.aggregator.ParameterAveragingElementCombineFunction;
 import org.deeplearning4j.spark.impl.paramavg.stats.ParameterAveragingTrainingMasterStats;
 import org.deeplearning4j.spark.util.SparkUtils;
-import org.deeplearning4j.spark.util.UIDProvider;
+import org.deeplearning4j.util.UIDProvider;
 import org.deeplearning4j.spark.util.serde.StorageLevelDeserializer;
 import org.deeplearning4j.spark.util.serde.StorageLevelSerializer;
 import org.nd4j.linalg.api.ndarray.INDArray;
@@ -55,9 +60,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.Random;
+import java.util.*;
 
 /**
  * ParameterAveragingTrainingMaster: A {@link TrainingMaster} implementation for training networks on Spark.
@@ -66,11 +69,11 @@ import java.util.Random;
  * @author Alex Black
  */
 @Data
-@JsonIgnoreProperties({"stats","listeners","iterationCount","rng","lastExportedRDDId","lastRDDExportPath","trainingMasterUID"})
-@EqualsAndHashCode(exclude = {"stats","listeners","iterationCount","rng","lastExportedRDDId","lastRDDExportPath","trainingMasterUID"})
+@JsonIgnoreProperties({"stats", "listeners", "iterationCount", "rng", "lastExportedRDDId", "lastRDDExportPath", "trainingMasterUID"})
+@EqualsAndHashCode(exclude = {"stats", "listeners", "iterationCount", "rng", "lastExportedRDDId", "lastRDDExportPath", "trainingMasterUID"})
+@Slf4j
 public class ParameterAveragingTrainingMaster implements TrainingMaster<ParameterAveragingTrainingResult, ParameterAveragingTrainingWorker> {
 
-    private static final Logger log = LoggerFactory.getLogger(ParameterAveragingTrainingMaster.class);
     private static final int COALESCE_THRESHOLD = 3;
     private static ObjectMapper jsonMapper;
     private static ObjectMapper yamlMapper;
@@ -83,7 +86,6 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
     private int prefetchNumBatches;
     private boolean collectTrainingStats;
     private ParameterAveragingTrainingMasterStats.ParameterAveragingTrainingMasterStatsHelper stats;
-    private Collection<IterationListener> listeners;
     private int iterationCount = 0;
     private Repartition repartition;
     private RepartitionStrategy repartitionStrategy;
@@ -97,11 +99,16 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
     private String exportDirectory = null;
     private Random rng;
 
+    private Collection<TrainingHook> trainingHookList;
     private int lastExportedRDDId = Integer.MIN_VALUE;
     private String lastRDDExportPath;
     private final String trainingMasterUID;
 
-    private ParameterAveragingTrainingMaster(){
+    //Listeners etc
+    private Collection<IterationListener> listeners;
+    private StatsStorageRouter statsStorage;
+
+    private ParameterAveragingTrainingMaster() {
         // no-arg constructor for Jackson
 
         String jvmuid = UIDProvider.getJVMUID();
@@ -122,7 +129,9 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         this.storageLevelStreams = builder.storageLevelStreams;
         this.rddTrainingApproach = builder.rddTrainingApproach;
         this.exportDirectory = builder.exportDirectory;
-        if(builder.rngSeed == null){
+        this.trainingHookList = builder.trainingHooks;
+
+        if (builder.rngSeed == null) {
             this.rng = new Random();
         } else {
             this.rng = new Random(builder.rngSeed);
@@ -180,21 +189,21 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         this.rng = new Random();
     }
 
-    private static synchronized ObjectMapper getJsonMapper(){
-        if(jsonMapper == null){
+    private static synchronized ObjectMapper getJsonMapper() {
+        if (jsonMapper == null) {
             jsonMapper = getNewMapper(new JsonFactory());
         }
         return jsonMapper;
     }
 
-    private static synchronized ObjectMapper getYamlMapper(){
-        if(yamlMapper == null){
+    private static synchronized ObjectMapper getYamlMapper() {
+        if (yamlMapper == null) {
             yamlMapper = getNewMapper(new YAMLFactory());
         }
         return yamlMapper;
     }
 
-    private static ObjectMapper getNewMapper(JsonFactory jsonFactory){
+    private static ObjectMapper getNewMapper(JsonFactory jsonFactory) {
         ObjectMapper om = new ObjectMapper(jsonFactory);
         om.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         om.configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
@@ -205,25 +214,49 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         return om;
     }
 
+    /**
+     * Remove a training hook from the worker
+     *
+     * @param trainingHook the training hook to remove
+     */
     @Override
-    public String toJson(){
+    public void removeHook(TrainingHook trainingHook) {
+        if(trainingHookList == null) return;
+        trainingHookList.remove(trainingHook);
+    }
+
+    /**
+     * Add a hook for the master for pre and post training
+     *
+     * @param trainingHook the training hook to add
+     */
+    @Override
+    public void addHook(TrainingHook trainingHook) {
+        if(trainingHookList == null){
+            trainingHookList = new ArrayList<>();
+        }
+        trainingHookList.add(trainingHook);
+    }
+
+    @Override
+    public String toJson() {
         ObjectMapper om = getJsonMapper();
 
-        try{
+        try {
             return om.writeValueAsString(this);
-        }catch (JsonProcessingException e){
-            throw new RuntimeException("Error producing JSON representation for ParameterAveragingTrainingMaster",e);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Error producing JSON representation for ParameterAveragingTrainingMaster", e);
         }
     }
 
     @Override
-    public String toYaml(){
+    public String toYaml() {
         ObjectMapper om = getYamlMapper();
 
-        try{
+        try {
             return om.writeValueAsString(this);
-        }catch (JsonProcessingException e){
-            throw new RuntimeException("Error producing YAML representation for ParameterAveragingTrainingMaster",e);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Error producing YAML representation for ParameterAveragingTrainingMaster", e);
         }
     }
 
@@ -231,14 +264,14 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
      * Create a ParameterAveragingTrainingMaster instance by deserializing a JSON string that has been serialized with
      * {@link #toJson()}
      *
-     * @param jsonStr    ParameterAveragingTrainingMaster configuration serialized as JSON
+     * @param jsonStr ParameterAveragingTrainingMaster configuration serialized as JSON
      */
-    public static ParameterAveragingTrainingMaster fromJson(String jsonStr){
+    public static ParameterAveragingTrainingMaster fromJson(String jsonStr) {
         ObjectMapper om = getJsonMapper();
-        try{
+        try {
             return om.readValue(jsonStr, ParameterAveragingTrainingMaster.class);
-        }catch(IOException e){
-            throw new RuntimeException("Could not parse JSON",e);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not parse JSON", e);
         }
     }
 
@@ -246,17 +279,16 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
      * Create a ParameterAveragingTrainingMaster instance by deserializing a YAML string that has been serialized with
      * {@link #toYaml()}
      *
-     * @param yamlStr    ParameterAveragingTrainingMaster configuration serialized as YAML
+     * @param yamlStr ParameterAveragingTrainingMaster configuration serialized as YAML
      */
-    public static ParameterAveragingTrainingMaster fromYaml(String yamlStr){
+    public static ParameterAveragingTrainingMaster fromYaml(String yamlStr) {
         ObjectMapper om = getYamlMapper();
-        try{
+        try {
             return om.readValue(yamlStr, ParameterAveragingTrainingMaster.class);
-        }catch(IOException e){
-            throw new RuntimeException("Could not parse YAML",e);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not parse YAML", e);
         }
     }
-
 
 
     @Override
@@ -269,8 +301,8 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         Broadcast<NetBroadcastTuple> broadcast = network.getSparkContext().broadcast(tuple);
         if (collectTrainingStats) stats.logBroadcastEnd();
 
-        WorkerConfiguration configuration = new WorkerConfiguration(false, batchSizePerWorker, averagingFrequency, prefetchNumBatches, collectTrainingStats);
-        return new ParameterAveragingTrainingWorker(broadcast, saveUpdater, configuration);
+        WorkerConfiguration configuration = new WorkerConfiguration(false, rddDataSetNumExamples, batchSizePerWorker, averagingFrequency, prefetchNumBatches, collectTrainingStats);
+        return new ParameterAveragingTrainingWorker(broadcast, saveUpdater, configuration, trainingHookList, listeners, getRouterProvider());
     }
 
     @Override
@@ -283,8 +315,8 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         Broadcast<NetBroadcastTuple> broadcast = graph.getSparkContext().broadcast(tuple);
         if (collectTrainingStats) stats.logBroadcastEnd();
 
-        WorkerConfiguration configuration = new WorkerConfiguration(true, batchSizePerWorker, averagingFrequency, prefetchNumBatches, collectTrainingStats);
-        return new ParameterAveragingTrainingWorker(broadcast, saveUpdater, configuration);
+        WorkerConfiguration configuration = new WorkerConfiguration(true, rddDataSetNumExamples, batchSizePerWorker, averagingFrequency, prefetchNumBatches, collectTrainingStats);
+        return new ParameterAveragingTrainingWorker(broadcast, saveUpdater, configuration, trainingHookList, listeners, getRouterProvider());
     }
 
     private int numObjectsEachWorker(int numExamplesEachRddObject) {
@@ -354,7 +386,7 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
 
         int origNumPartitions = trainingData.partitions().size();
         if (origNumPartitions >= COALESCE_THRESHOLD * numWorkers) {
-            log.info("Coalesing PortableDataStreams from {} to {} partitions", origNumPartitions, numWorkers);
+            log.info("Coalescing PortableDataStreams from {} to {} partitions", origNumPartitions, numWorkers);
             trainingData = trainingData.coalesce(numWorkers);
         }
         if (storageLevelStreams != null) trainingData.persist(storageLevelStreams);
@@ -381,7 +413,7 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         executeTrainingPathsHelper(network, trainingDataPaths, rddDataSetNumExamples);
     }
 
-    private void executeTrainingPathsHelper(SparkDl4jMultiLayer network, JavaRDD<String> trainingDataPaths, int dataSetObjectsNumExamples){
+    private void executeTrainingPathsHelper(SparkDl4jMultiLayer network, JavaRDD<String> trainingDataPaths, int dataSetObjectsNumExamples) {
         if (numWorkers == null) numWorkers = network.getSparkContext().defaultParallelism();
 
         if (collectTrainingStats) stats.logFitStart();
@@ -418,7 +450,7 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
     public void executeTrainingMDS(SparkComputationGraph graph, JavaRDD<MultiDataSet> trainingData) {
         if (numWorkers == null) numWorkers = graph.getSparkContext().defaultParallelism();
 
-        if(rddTrainingApproach == RDDTrainingApproach.Direct){
+        if (rddTrainingApproach == RDDTrainingApproach.Direct) {
             executeTrainingDirect(graph, trainingData);
         } else {
             //Export data if required (or, use cached export)
@@ -427,10 +459,10 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         }
     }
 
-    private void executeTrainingDirect(SparkComputationGraph graph, JavaRDD<MultiDataSet> trainingData){
+    private void executeTrainingDirect(SparkComputationGraph graph, JavaRDD<MultiDataSet> trainingData) {
         if (collectTrainingStats) stats.logFitStart();
         //For "vanilla" parameter averaging training, we need to split the full data set into batches of size N, such that we can process the specified
-        // number of minibatches between averagings
+        // number of minibatches between averaging
         //But to do that, we need to know: (a) the number of examples, and (b) the number of workers
         if (storageLevel != null) trainingData.persist(storageLevel);
 
@@ -544,7 +576,7 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         executeTrainingPathsMDSHelper(network, trainingMultiDataPaths, rddDataSetNumExamples);
     }
 
-    private void executeTrainingPathsMDSHelper(SparkComputationGraph network, JavaRDD<String> trainingMultiDataPaths, int dataSetObjectsNumExamples){
+    private void executeTrainingPathsMDSHelper(SparkComputationGraph network, JavaRDD<String> trainingMultiDataPaths, int dataSetObjectsNumExamples) {
         if (numWorkers == null) numWorkers = network.getSparkContext().defaultParallelism();
 
         if (collectTrainingStats) stats.logFitStart();
@@ -591,12 +623,23 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
     }
 
     @Override
+    public void setListeners(Collection<IterationListener> listeners) {
+        setListeners(null, listeners);
+    }
+
+    @Override
+    public void setListeners(StatsStorageRouter statsStorage, Collection<IterationListener> listeners) {
+        this.statsStorage = statsStorage;
+        this.listeners = listeners;
+    }
+
+    @Override
     public boolean deleteTempFiles(JavaSparkContext sc) {
         return lastRDDExportPath == null || deleteTempDir(sc, lastRDDExportPath);
     }
 
     @Override
-    public boolean deleteTempFiles(SparkContext sc){
+    public boolean deleteTempFiles(SparkContext sc) {
         return deleteTempFiles(new JavaSparkContext(sc));
     }
 
@@ -736,51 +779,71 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
 
 
         if (collectTrainingStats) stats.logProcessParamsUpdaterStart();
-        params.divi(aggCount);
-        INDArray updaterState = tuple.getUpdaterStateSum();
-        if (updaterState != null) updaterState.divi(aggCount);   //May be null if all SGD updaters, for example
+        if(params != null){
+            params.divi(aggCount);
+            INDArray updaterState = tuple.getUpdaterStateSum();
+            if (updaterState != null) updaterState.divi(aggCount);   //May be null if all SGD updaters, for example
 
-        if (network != null) {
-            MultiLayerNetwork net = network.getNetwork();
-            net.setParameters(params);
-            if (updaterState != null) net.getUpdater().setStateViewArray(null, updaterState, false);
+            if (network != null) {
+                MultiLayerNetwork net = network.getNetwork();
+                net.setParameters(params);
+                if (updaterState != null) net.getUpdater().setStateViewArray(null, updaterState, false);
 
-            network.setScore(tuple.getScoreSum() / tuple.getAggregationsCount());
+                network.setScore(tuple.getScoreSum() / tuple.getAggregationsCount());
+            } else {
+                ComputationGraph g = graph.getNetwork();
+                g.setParams(params);
+                if (updaterState != null) g.getUpdater().setStateViewArray(updaterState);
+
+                graph.setScore(tuple.getScoreSum() / tuple.getAggregationsCount());
+            }
         } else {
-            ComputationGraph g = graph.getNetwork();
-            g.setParams(params);
-            if (updaterState != null) g.getUpdater().setStateViewArray(updaterState);
-
-            graph.setScore(tuple.getScoreSum() / tuple.getAggregationsCount());
+            log.info("Skipping imbalanced split with no data for all executors");
         }
+
+
 
         if (collectTrainingStats) {
             stats.logProcessParamsUpdaterEnd();
             stats.addWorkerStats(aggregatedStats);
         }
 
-        if (Nd4j.getExecutioner() instanceof GridExecutioner)
-            ((GridExecutioner)Nd4j.getExecutioner()).flushQueueBlocking();
+        if(statsStorage != null) {
+            Collection<StorageMetaData> meta = tuple.getListenerMetaData();
+            if(meta != null && meta.size() > 0){
+                statsStorage.putStorageMetaData(meta);
+            }
 
-        log.info("Completed training of split {} of {}", splitNum, totalSplits);
+            Collection<Persistable> staticInfo = tuple.getListenerStaticInfo();
+            if(staticInfo != null && staticInfo.size() > 0){
+                statsStorage.putStaticInfo(staticInfo);
+            }
 
-        if (listeners != null) {
-            if (network != null) {
-                MultiLayerNetwork net = network.getNetwork();
-                net.setScore(network.getScore());
-                for (IterationListener il : listeners) {
-                    il.iterationDone(net, iterationCount);
-                }
-            } else {
-                ComputationGraph g = graph.getNetwork();
-                g.setScore(graph.getScore());
-                for (IterationListener il : listeners) {
-                    il.iterationDone(g, iterationCount);
-                }
+            Collection<Persistable> updates = tuple.getListenerUpdates();
+            if(updates != null && updates.size() > 0){
+                statsStorage.putUpdate(updates);
             }
         }
 
-        iterationCount++;
+        if (Nd4j.getExecutioner() instanceof GridExecutioner)
+            ((GridExecutioner) Nd4j.getExecutioner()).flushQueueBlocking();
+
+
+
+        log.info("Completed training of split {} of {}", splitNum, totalSplits);
+
+        if(params != null) {
+            //Params may be null for edge case (empty RDD)
+            if (network != null) {
+                MultiLayerConfiguration conf = network.getNetwork().getLayerWiseConfigurations();
+                int numUpdates = network.getNetwork().conf().getNumIterations() * averagingFrequency;
+                conf.setIterationCount(conf.getIterationCount() + numUpdates);
+            } else {
+                ComputationGraphConfiguration conf = graph.getNetwork().getConfiguration();
+                int numUpdates = graph.getNetwork().conf().getNumIterations() * averagingFrequency;
+                conf.setIterationCount(conf.getIterationCount() + numUpdates);
+            }
+        }
     }
 
 
@@ -861,7 +924,7 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         return baseDir;
     }
 
-    private String exportMDS(JavaRDD<MultiDataSet> trainingData){
+    private String exportMDS(JavaRDD<MultiDataSet> trainingData) {
         String baseDir = getBaseDirForRDD(trainingData);
         String dataDir = baseDir + "data/";
         String pathsDir = baseDir + "paths/";
@@ -912,6 +975,12 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
     }
 
 
+    private StatsStorageRouterProvider getRouterProvider(){
+        if(statsStorage == null) return null;   //Not needed
+        return new VanillaStatsStorageRouterProvider();
+    }
+
+
     public static class Builder {
         private boolean saveUpdater;
         private Integer numWorkers;
@@ -926,7 +995,37 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
         private RDDTrainingApproach rddTrainingApproach = RDDTrainingApproach.Export;
         private String exportDirectory = null;
         private Long rngSeed;
+        private Collection<TrainingHook> trainingHooks;
 
+
+        /**
+         * Adds training hooks to the master.
+         * The training master will setup the workers
+         * with the desired hooks for training.
+         * This can allow for tings like parameter servers
+         * and async updates as well as collecting statistics.
+         *
+         * @param trainingHooks the training hooks to ad
+         * @return
+         */
+        public Builder trainingHooks(Collection<TrainingHook> trainingHooks) {
+            this.trainingHooks = trainingHooks;
+            return this;
+        }
+
+        /**
+         * Adds training hooks to the master.
+         * The training master will setup the workers
+         * with the desired hooks for training.
+         * This can allow for tings like parameter servers
+         * and async updates as well as collecting statistics.
+         * @param hooks the training hooks to ad
+         * @return
+         */
+        public Builder trainingHooks(TrainingHook... hooks) {
+            this.trainingHooks = Arrays.asList(hooks);
+            return this;
+        }
 
         /**
          * Same as {@link #Builder(Integer, int)} but automatically set number of workers based on JavaSparkContext.defaultParallelism()
@@ -1104,10 +1203,10 @@ public class ParameterAveragingTrainingMaster implements TrainingMaster<Paramete
          * Random number generator seed, used mainly for enforcing repeatable splitting on RDDs
          * Default: no seed set (i.e., random seed)
          *
-         * @param rngSeed    RNG seed
+         * @param rngSeed RNG seed
          * @return
          */
-        public Builder rngSeed(long rngSeed){
+        public Builder rngSeed(long rngSeed) {
             this.rngSeed = rngSeed;
             return this;
         }

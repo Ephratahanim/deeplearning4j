@@ -48,16 +48,20 @@ public interface Layer extends Serializable,Cloneable,Model {
     /**Calculate the l2 regularization term<br>
      * 0.0 if regularization is not used. Or 0.5 * l2Coeff * l2Magnitude otherwise.<br>
      * Note that this does not divide by mini-batch size
+     * @param backpropOnlyParams If true: calculate L2 based on backprop params only. If false: calculate
+     *                           based on all params (including pretrain params, if any)
      * @return the l2 regularization term for this layer.
      */
-    double calcL2();
+    double calcL2(boolean backpropOnlyParams);
 
     /**Calculate the l1 regularization term<br>
      * 0.0 if regularization is not used. Or l1Coeff * l1Magnitude otherwise.<br>
      * Note that this does not divide by mini-batch size
+     * @param backpropOnlyParams If true: calculate L1 based on backprop params only. If false: calculate
+     *                           based on all params (including pretrain params, if any)
      * @return the l1 regularization term for this layer.
      */
-    double calcL1();
+    double calcL1(boolean backpropOnlyParams);
 
     /**
      * Returns the layer type
@@ -260,6 +264,37 @@ public interface Layer extends Serializable,Cloneable,Model {
      */
     int getInputMiniBatchSize();
 
+    /**
+     * Set the mask array. Note: In general, {@link #feedForwardMaskArray(INDArray, MaskState, int)} should be used in
+     * preference to this.
+     * @param maskArray Mask array to set
+     */
     void setMaskArray(INDArray maskArray);
 
+
+    INDArray getMaskArray();
+
+    /**
+     * Returns true if the layer can be trained in an unsupervised/pretrain manner (VAE, RBMs etc)
+     *
+     * @return true if the layer can be pretrained (using fit(INDArray), false otherwise
+     */
+    boolean isPretrainLayer();
+
+
+    /**
+     * Feed forward the input mask array, setting in in the layer as appropriate. This allows different layers to
+     * handle masks differently - for example, bidirectional RNNs and normal RNNs operate differently with masks (the
+     * former sets activations to 0 outside of the data present region (and keeps the mask active for future layers like
+     * dense layers), whereas normal RNNs don't zero out the activations/errors )instead relying on backpropagated error
+     * arrays to handle the variable length case.<br>
+     * This is also used for example for networks that contain global pooling layers, arbitrary preprocessors, etc.
+     *
+     * @param maskArray        Mask array to set
+     * @param currentMaskState Current state of the mask - see {@link MaskState}
+     * @param minibatchSize    Current minibatch size. Needs to be known as it cannot always be inferred from the activations
+     *                         array due to reshaping (such as a DenseLayer within a recurrent neural network)
+     * @return                 New mask array after this layer, along with the new mask state.
+     */
+    Pair<INDArray,MaskState> feedForwardMaskArray(INDArray maskArray, MaskState currentMaskState, int minibatchSize);
 }

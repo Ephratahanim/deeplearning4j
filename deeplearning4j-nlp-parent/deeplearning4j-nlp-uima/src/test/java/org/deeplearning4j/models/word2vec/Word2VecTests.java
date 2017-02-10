@@ -25,6 +25,7 @@ import org.deeplearning4j.models.embeddings.learning.impl.elements.CBOW;
 import org.deeplearning4j.models.embeddings.learning.impl.elements.SkipGram;
 import org.deeplearning4j.models.embeddings.loader.WordVectorSerializer;
 import org.deeplearning4j.models.embeddings.reader.impl.BasicModelUtils;
+import org.deeplearning4j.models.embeddings.reader.impl.FlatModelUtils;
 import org.deeplearning4j.models.embeddings.wordvectors.WordVectors;
 import org.deeplearning4j.text.sentenceiterator.BasicLineIterator;
 import org.deeplearning4j.text.sentenceiterator.SentenceIterator;
@@ -33,6 +34,7 @@ import org.deeplearning4j.text.tokenization.tokenizer.preprocessor.CommonPreproc
 import org.deeplearning4j.text.tokenization.tokenizerfactory.DefaultTokenizerFactory;
 import org.deeplearning4j.text.tokenization.tokenizerfactory.TokenizerFactory;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.factory.Nd4j;
@@ -65,7 +67,13 @@ public class Word2VecTests {
         File googleModelTextFile = new ClassPathResource("word2vecserialization/google_news_30.txt").getFile();
         googleModel = WordVectorSerializer.loadGoogleModel(googleModelTextFile, false);
         inputFile = new ClassPathResource("/big/raw_sentences.txt").getFile();
-        pathToWriteto = "testing_word2vec_serialization.txt";
+
+        File ptwt = new File(System.getProperty("java.io.tmpdir"), "testing_word2vec_serialization.txt" );
+
+        pathToWriteto =  ptwt.getAbsolutePath();
+
+
+
         FileUtils.deleteDirectory(new File("word2vec-index"));
     }
 
@@ -118,13 +126,16 @@ public class Word2VecTests {
                 .learningRate(0.025)
                 .layerSize(100)
                 .seed(42)
+                .batchSize(13500)
                 .sampling(0)
-                .negativeSample(5)
+                .negativeSample(0)
+                //.epochs(10)
                 .windowSize(5)
                 .modelUtils(new BasicModelUtils<VocabWord>())
-                .useAdaGrad(true)
+                .useAdaGrad(false)
+                .useHierarchicSoftmax(true)
                 .iterate(iter)
-                .workers(10)
+                .workers(4)
                 .tokenizerFactory(t)
                 .build();
 
@@ -152,15 +163,16 @@ public class Word2VecTests {
 
         Word2Vec vec = new Word2Vec.Builder()
                 .minWordFrequency(1)
-                .iterations(2)
+                .iterations(5)
                 .learningRate(0.025)
                 .layerSize(150)
                 .seed(42)
                 .sampling(0)
-                .negativeSample(5)
+                .negativeSample(0)
+                .useHierarchicSoftmax(true)
                 .windowSize(5)
                 .modelUtils(new BasicModelUtils<VocabWord>())
-                .useAdaGrad(true)
+                .useAdaGrad(false)
                 .iterate(iter)
                 .workers(8)
                 .tokenizerFactory(t)
@@ -182,6 +194,9 @@ public class Word2VecTests {
         assertTrue(lst.contains("year"));
         assertTrue(sim > 0.65f);
     }
+
+
+
 
 
     @Test
@@ -207,6 +222,7 @@ public class Word2VecTests {
                 //.negativeSample(10)
                 .epochs(1)
                 .windowSize(5)
+                .allowParallelTokenization(true)
                 .modelUtils(new BasicModelUtils<VocabWord>())
                 .iterate(iter)
                 .tokenizerFactory(t)
@@ -214,7 +230,6 @@ public class Word2VecTests {
 
         assertEquals(new ArrayList<String>(), vec.getStopWords());
         vec.fit();
-      //  WordVectorSerializer.writeWordVectors(vec, pathToWriteto);
         File tempFile = File.createTempFile("temp", "temp");
         tempFile.deleteOnExit();
 
@@ -258,6 +273,8 @@ public class Word2VecTests {
         assertEquals(matrix.getRow(0), vec.getWordVectorMatrix("day"));
         assertEquals(matrix.getRow(1), vec.getWordVectorMatrix("night"));
         assertEquals(matrix.getRow(2), vec.getWordVectorMatrix("week"));
+
+        WordVectorSerializer.writeWordVectors(vec, pathToWriteto);
     }
 
     /**
@@ -289,6 +306,159 @@ public class Word2VecTests {
         WordVectors wordVectors = WordVectorSerializer.loadTxtVectors(modelFile);
         Collection<String> lst = wordVectors.wordsNearest("day", 10);
         System.out.println(Arrays.toString(lst.toArray()));
+    }
+
+
+    @Ignore
+    @Test
+    public void testWord2VecGoogleModelUptraining() throws Exception {
+        long time1 = System.currentTimeMillis();
+        Word2Vec vec = WordVectorSerializer.readWord2VecModel(new File("C:\\Users\\raver\\Downloads\\GoogleNews-vectors-negative300.bin.gz"), false);
+        long time2 = System.currentTimeMillis();
+        log.info("Model loaded in {} msec", time2 - time1);
+        SentenceIterator iter = new BasicLineIterator(inputFile.getAbsolutePath());
+        // Split on white spaces in the line to get words
+        TokenizerFactory t = new DefaultTokenizerFactory();
+        t.setTokenPreProcessor(new CommonPreprocessor());
+
+        vec.setTokenizerFactory(t);
+        vec.setSentenceIter(iter);
+        vec.getConfiguration().setUseHierarchicSoftmax(false);
+        vec.getConfiguration().setNegative(5.0);
+        vec.setElementsLearningAlgorithm(new CBOW<VocabWord>());
+
+        vec.fit();
+    }
+
+    @Test
+    public void testW2VnegativeOnRestore() throws Exception {
+        // Strip white space before and after for each line
+        SentenceIterator iter = new BasicLineIterator(inputFile.getAbsolutePath());
+        // Split on white spaces in the line to get words
+        TokenizerFactory t = new DefaultTokenizerFactory();
+        t.setTokenPreProcessor(new CommonPreprocessor());
+
+
+        Word2Vec vec = new Word2Vec.Builder()
+                    .minWordFrequency(1)
+                    .iterations(3)
+                    .batchSize(64)
+                    .layerSize(100)
+                    .stopWords(new ArrayList<String>())
+                    .seed(42)
+                    .learningRate(0.025)
+                    .minLearningRate(0.001)
+                    .sampling(0)
+                    .elementsLearningAlgorithm(new SkipGram<VocabWord>())
+                    .negativeSample(10)
+                    .epochs(1)
+                    .windowSize(5)
+                    .useHierarchicSoftmax(false)
+                    .allowParallelTokenization(true)
+                    .modelUtils(new FlatModelUtils<VocabWord>())
+                    .iterate(iter)
+                    .tokenizerFactory(t)
+                    .build();
+
+
+        assertEquals(false, vec.getConfiguration().isUseHierarchicSoftmax());
+
+        log.info("Fit 1");
+        vec.fit();
+
+        File tmpFile = File.createTempFile("temp", "file");
+        tmpFile.deleteOnExit();
+
+        WordVectorSerializer.writeWord2VecModel(vec, tmpFile);
+
+        iter.reset();
+
+        Word2Vec restoredVec = WordVectorSerializer.readWord2VecModel(tmpFile, true);
+        restoredVec.setTokenizerFactory(t);
+        restoredVec.setSentenceIter(iter);
+
+        assertEquals(false, restoredVec.getConfiguration().isUseHierarchicSoftmax());
+        assertTrue(restoredVec.getModelUtils() instanceof FlatModelUtils);
+        assertTrue(restoredVec.getConfiguration().isAllowParallelTokenization());
+
+        log.info("Fit 2");
+        restoredVec.fit();
+
+
+        iter.reset();
+        restoredVec = WordVectorSerializer.readWord2VecModel(tmpFile, false);
+        restoredVec.setTokenizerFactory(t);
+        restoredVec.setSentenceIter(iter);
+
+        assertEquals(false, restoredVec.getConfiguration().isUseHierarchicSoftmax());
+        assertTrue(restoredVec.getModelUtils() instanceof BasicModelUtils);
+
+        log.info("Fit 3");
+        restoredVec.fit();
+    }
+
+    @Test
+    public void testUnknown1() throws Exception {
+        // Strip white space before and after for each line
+        SentenceIterator iter = new BasicLineIterator(inputFile.getAbsolutePath());
+        // Split on white spaces in the line to get words
+        TokenizerFactory t = new DefaultTokenizerFactory();
+        t.setTokenPreProcessor(new CommonPreprocessor());
+
+        Word2Vec vec = new Word2Vec.Builder()
+                .minWordFrequency(10)
+                .useUnknown(true)
+                .unknownElement(new VocabWord(1.0, "PEWPEW"))
+                .iterations(1)
+                .layerSize(100)
+                .stopWords(new ArrayList<String>())
+                .seed(42)
+                .learningRate(0.025)
+                .minLearningRate(0.001)
+                .sampling(0)
+                .elementsLearningAlgorithm(new CBOW<VocabWord>())
+                .epochs(1)
+                .windowSize(5)
+                .useHierarchicSoftmax(true)
+                .allowParallelTokenization(true)
+                .modelUtils(new FlatModelUtils<VocabWord>())
+                .iterate(iter)
+                .tokenizerFactory(t)
+                .build();
+
+        vec.fit();
+
+        assertTrue(vec.hasWord("PEWPEW"));
+        assertTrue(vec.getVocab().containsWord("PEWPEW"));
+
+        INDArray unk = vec.getWordVectorMatrix("PEWPEW");
+        assertNotEquals(null, unk);
+
+        File tempFile = File.createTempFile("temp","file");
+        tempFile.deleteOnExit();
+
+        WordVectorSerializer.writeWord2VecModel(vec, tempFile);
+
+        log.info("Original configuration: {}", vec.getConfiguration());
+
+        Word2Vec restored = WordVectorSerializer.readWord2VecModel(tempFile);
+
+        assertTrue(restored.hasWord("PEWPEW"));
+        assertTrue(restored.getVocab().containsWord("PEWPEW"));
+        INDArray unk_restored = restored.getWordVectorMatrix("PEWPEW");
+
+        assertEquals(unk, unk_restored);
+
+
+
+        // now we're getting some junk word
+        INDArray random = vec.getWordVectorMatrix("hhsd7d7sdnnmxc_SDsda");
+        INDArray randomRestored = restored.getWordVectorMatrix("hhsd7d7sdnnmxc_SDsda");
+
+        log.info("Restored configuration: {}", restored.getConfiguration());
+
+        assertEquals(unk, random);
+        assertEquals(unk, randomRestored);
     }
 
     private static void printWords(String target, Collection<String> list, Word2Vec vec) {

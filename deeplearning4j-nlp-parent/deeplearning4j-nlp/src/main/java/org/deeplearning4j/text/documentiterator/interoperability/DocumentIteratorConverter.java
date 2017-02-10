@@ -41,9 +41,9 @@ public class DocumentIteratorConverter implements LabelAwareIterator {
 
             if (backendIterator instanceof LabelAwareDocumentIterator) {
                 String currentLabel = ((LabelAwareDocumentIterator) backendIterator).currentLabel();
-                document.setLabel(currentLabel);
+                document.addLabel(currentLabel);
                 generator.storeLabel(currentLabel);
-            } else document.setLabel(generator.nextLabel());
+            } else document.addLabel(generator.nextLabel());
 
             return document;
         } catch (Exception e) {
@@ -59,8 +59,28 @@ public class DocumentIteratorConverter implements LabelAwareIterator {
     }
 
     @Override
+    public boolean hasNext() {
+        return hasNextDocument();
+    }
+
+    @Override
+    public LabelledDocument next() {
+        return nextDocument();
+    }
+
+    @Override
+    public void remove() {
+        // no-op
+    }
+
+    @Override
     public LabelsSource getLabelsSource() {
         return generator;
+    }
+
+    @Override
+    public void shutdown() {
+
     }
 
     protected String readStream(InputStream stream) throws IOException {
@@ -69,7 +89,7 @@ public class DocumentIteratorConverter implements LabelAwareIterator {
         BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
         String line = "";
         while ((line = reader.readLine()) != null) {
-            builder.append(line);
+            builder.append(line).append(" ");
         }
         return builder.toString();
     }

@@ -1,7 +1,10 @@
 package org.deeplearning4j.util;
 
 import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.input.CloseShieldInputStream;
 import org.apache.commons.io.output.CloseShieldOutputStream;
+import org.apache.commons.lang3.*;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.Model;
 import org.deeplearning4j.nn.api.Updater;
@@ -13,13 +16,17 @@ import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.updater.graph.ComputationGraphUpdater;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.api.DataSetPreProcessor;
+import org.nd4j.linalg.dataset.api.preprocessor.DataNormalization;
+import org.nd4j.linalg.exception.ND4JIllegalStateException;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.heartbeat.reports.Task;
 
 import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -29,10 +36,12 @@ import java.util.zip.ZipOutputStream;
  *
  * @author raver119@gmail.com
  */
+@Slf4j
 public class ModelSerializer {
 
     public static final String OLD_UPDATER_BIN = "updater.bin";
     public static final String UPDATER_BIN = "updaterState.bin";
+    public static final String NORMALIZER_BIN = "normalizer.bin";
 
     private ModelSerializer() {
     }
@@ -47,8 +56,6 @@ public class ModelSerializer {
     public static void writeModel(@NonNull Model model, @NonNull File file, boolean saveUpdater) throws IOException {
         try(BufferedOutputStream stream = new BufferedOutputStream(new FileOutputStream(file))){
             writeModel(model, stream, saveUpdater);
-            stream.flush();
-            stream.close();
         }
     }
 
@@ -63,8 +70,6 @@ public class ModelSerializer {
     public static void writeModel(@NonNull Model model, @NonNull String path, boolean saveUpdater) throws IOException {
         try(BufferedOutputStream stream = new BufferedOutputStream(new FileOutputStream(path))){
             writeModel(model, stream, saveUpdater);
-            stream.flush();
-            stream.close();
         }
     }
 
@@ -94,14 +99,23 @@ public class ModelSerializer {
         ZipEntry coefficients = new ZipEntry("coefficients.bin");
         zipfile.putNextEntry(coefficients);
 
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        File tempFile = File.createTempFile("model", "saver");
+        tempFile.deleteOnExit();
+
+        FileOutputStream fos = new FileOutputStream(tempFile);
+        BufferedOutputStream bos = new BufferedOutputStream(fos);
         DataOutputStream dos = new DataOutputStream(bos);
         Nd4j.write(model.params(), dos);
         dos.flush();
         dos.close();
+        bos.close();
+        fos.close();
 
-        InputStream inputStream = new ByteArrayInputStream(bos.toByteArray());
+
+
+        InputStream inputStream = new BufferedInputStream(new FileInputStream(tempFile));
         writeEntry(inputStream, zipfile);
+        inputStream.close();
 
         if (saveUpdater) {
             INDArray updaterState = null;
@@ -115,14 +129,18 @@ public class ModelSerializer {
                 ZipEntry updater = new ZipEntry(UPDATER_BIN);
                 zipfile.putNextEntry(updater);
 
-                bos = new ByteArrayOutputStream();
+                fos = new FileOutputStream(tempFile);
+                bos = new BufferedOutputStream(fos);
                 dos = new DataOutputStream(bos);
                 Nd4j.write(updaterState, dos);
                 dos.flush();
                 dos.close();
+                bos.close();
+                fos.close();
 
-                inputStream = new ByteArrayInputStream(bos.toByteArray());
+                inputStream = new BufferedInputStream(new FileInputStream(tempFile));
                 writeEntry(inputStream, zipfile);
+                inputStream.close();
             }
         }
 
@@ -270,7 +288,9 @@ public class ModelSerializer {
      */
     public static MultiLayerNetwork restoreMultiLayerNetwork(@NonNull InputStream is, boolean loadUpdater) throws IOException {
         File tmpFile = File.createTempFile("restore", "multiLayer");
-        Files.copy(is, Paths.get(tmpFile.getAbsolutePath()), StandardCopyOption.REPLACE_EXISTING);
+        tmpFile.deleteOnExit();
+        //Files.copy(is, Paths.get(tmpFile.getAbsolutePath()), StandardCopyOption.REPLACE_EXISTING);
+        copyFile(is, tmpFile, true);
         return restoreMultiLayerNetwork(tmpFile, loadUpdater);
     }
 
@@ -333,7 +353,9 @@ public class ModelSerializer {
      */
     public static ComputationGraph restoreComputationGraph(@NonNull InputStream is, boolean loadUpdater) throws IOException {
         File tmpFile = File.createTempFile("restore", "compGraph");
-        Files.copy(is, Paths.get(tmpFile.getAbsolutePath()), StandardCopyOption.REPLACE_EXISTING);
+        tmpFile.deleteOnExit();
+        //Files.copy(is, Paths.get(tmpFile.getAbsolutePath()), StandardCopyOption.REPLACE_EXISTING);
+        copyFile(is, tmpFile, true);
         return restoreComputationGraph(tmpFile, loadUpdater);
     }
 
@@ -530,6 +552,142 @@ public class ModelSerializer {
             task.setArchitectureType(Task.ArchitectureType.UNKNOWN);
             task.setNetworkType(Task.NetworkType.DenseNetwork);
             return task;
+        }
+    }
+
+    /**
+     * This method appends normalizer to a given persisted model.
+     *
+     * PLEASE NOTE: File should be model file saved earlier with ModelSerializer
+     *
+     * @param f
+     * @param normalizer
+     */
+    public static void addNormalizerToModel(File f, DataNormalization normalizer) {
+            File tempFile = null;
+            ZipFile zipFile = null;
+            ZipOutputStream writeFile = null;
+            try {
+                // copy existing model to temporary file
+                tempFile = File.createTempFile("tempcopy", "temp");
+                tempFile.deleteOnExit();
+                //Files.copy(f.toPath(), tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                copyFile(f, tempFile, true);
+
+                zipFile = new ZipFile(tempFile);
+
+                writeFile = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(f)));
+
+                // roll over existing files within model, and copy them one by one
+                Enumeration<? extends ZipEntry> entries = zipFile.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+
+                    // we're NOT copying existing normalizer, if any
+                    if (entry.getName().equalsIgnoreCase(NORMALIZER_BIN))
+                        continue;;
+
+                    log.debug("Copying: {}", entry.getName());
+
+                    InputStream is = zipFile.getInputStream(entry);
+
+                    ZipEntry wEntry = new ZipEntry(entry.getName());
+                    writeFile.putNextEntry(wEntry);
+
+                    writeEntry(is, writeFile);
+                }
+
+                // now, add our normalizer as additional entry
+                ZipEntry nEntry = new ZipEntry(NORMALIZER_BIN);
+                writeFile.putNextEntry(nEntry);
+
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                org.apache.commons.lang3.SerializationUtils.serialize(normalizer, bos);
+
+                ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
+                writeEntry(bis, writeFile);
+
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            } finally {
+                try {
+                    if (tempFile != null)
+                        tempFile.delete();
+
+                    if (zipFile != null)
+                        zipFile.close();
+
+                    if (writeFile != null)
+                        writeFile.close();
+                } catch (Exception es) {
+                    //
+                }
+            }
+    }
+
+    /**
+     * This method restores normalizer from a given persisted model file
+     *
+     * PLEASE NOTE: File should be model file saved earlier with ModelSerializer with addNormalizerToModel being called
+     *
+     * @param file
+     * @return
+     */
+    public static DataNormalization restoreNormalizerFromFile(File file) {
+        try (ZipFile zipFile = new ZipFile(file)) {
+            ZipEntry norm = zipFile.getEntry(NORMALIZER_BIN);
+
+            // checking for file existence
+            if (norm == null)
+                return null;
+
+            InputStream stream = zipFile.getInputStream(norm);
+            ObjectInputStream ois = new ObjectInputStream(stream);
+
+            try {
+                DataNormalization normalizer = (DataNormalization) ois.readObject();
+                return normalizer;
+            } catch (ClassNotFoundException e) {
+                throw new RuntimeException(e);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * This method is drop-in replacement to Files.copy method, added to address Android compatibility issues
+     *
+     * @param from
+     * @param to
+     */
+    public static void copyFile(File from, File to, boolean overwrite) throws IOException {
+        if (!from.exists())
+            throw new IOException("Source file ["+from.getAbsolutePath()+"] doesn't exist");
+
+        if (!from.isFile())
+            throw new IOException("Source file isn't a file");
+
+        try(FileInputStream fis = new FileInputStream(from)) {
+            copyFile(fis, to, overwrite);
+        }
+    }
+
+    public static void copyFile(InputStream is, File to, boolean overwrite) throws IOException {
+        if (!to.isFile())
+            throw new IOException("Target file isn't file");
+
+        if (!overwrite && to.exists() && to.length() > 0)
+            throw new IOException("File ["+ to.getAbsolutePath()+"] already exists");
+
+
+        try(FileOutputStream fos = new FileOutputStream(to); BufferedOutputStream bos = new BufferedOutputStream(fos); CloseShieldInputStream cis = new CloseShieldInputStream(is); BufferedInputStream bis = new BufferedInputStream(cis)) {
+            byte[] data = new byte[4096];
+            int read = 0;
+            while ((read = bis.read(data)) != -1) {
+                    if (read > 0)
+                        bos.write(data, 0, read);
+            }
         }
     }
 }

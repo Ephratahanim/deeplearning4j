@@ -20,19 +20,28 @@ package org.deeplearning4j.nn.layers.convolution;
 
 
 import org.deeplearning4j.berkeley.Pair;
+import org.deeplearning4j.exception.DL4JInvalidInputException;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.conf.ConvolutionMode;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.gradient.DefaultGradient;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.layers.BaseLayer;
 import org.deeplearning4j.nn.params.ConvolutionParamInitializer;
+import org.deeplearning4j.util.ConvolutionUtils;
 import org.deeplearning4j.util.Dropout;
+import org.nd4j.linalg.activations.IActivation;
+import org.nd4j.linalg.activations.impl.ActivationIdentity;
+import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.api.shape.Shape;
 import org.nd4j.linalg.convolution.Convolution;
 import org.nd4j.linalg.factory.Nd4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Arrays;
+import java.util.Map;
 
 
 /**
@@ -43,11 +52,13 @@ import org.slf4j.LoggerFactory;
 public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layers.ConvolutionLayer> {
     protected static final Logger log = LoggerFactory.getLogger(ConvolutionLayer.class);
 
-    ConvolutionHelper helper = null;
+    protected ConvolutionHelper helper = null;
+    protected ConvolutionMode convolutionMode;
 
     public ConvolutionLayer(NeuralNetConfiguration conf) {
         super(conf);
         initializeHelper();
+        convolutionMode = ((org.deeplearning4j.nn.conf.layers.ConvolutionLayer)conf().getLayer()).getConvolutionMode();
     }
 
     public ConvolutionLayer(NeuralNetConfiguration conf, INDArray input) {
@@ -68,17 +79,35 @@ public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layer
     }
 
     @Override
-    public double calcL2() {
+    public double calcL2(boolean backpropParamsOnly) {
     	if(!conf.isUseRegularization() || conf.getLayer().getL2() <= 0.0 ) return 0.0;
 
-        double l2Norm = getParam(ConvolutionParamInitializer.WEIGHT_KEY).norm2Number().doubleValue();
-        return 0.5 * conf.getLayer().getL2() * l2Norm * l2Norm;
+        double l2Sum = 0.0;
+        for(Map.Entry<String,INDArray> entry : paramTable().entrySet()){
+            double l2 = conf.getL2ByParam(entry.getKey());
+            if(l2 > 0) {
+                double norm2 = getParam(entry.getKey()).norm2Number().doubleValue();
+                l2Sum += 0.5 * l2 * norm2 * norm2;
+            }
+        }
+
+        return l2Sum;
     }
 
     @Override
-    public double calcL1() {
+    public double calcL1(boolean backpropParamsOnly) {
     	if(!conf.isUseRegularization() || conf.getLayer().getL1() <= 0.0 ) return 0.0;
-        return conf.getLayer().getL1() * getParam(ConvolutionParamInitializer.WEIGHT_KEY).norm1Number().doubleValue();
+
+        double l1Sum = 0.0;
+        for(Map.Entry<String,INDArray> entry : paramTable().entrySet()){
+            double l1 = conf.getL1ByParam(entry.getKey());
+            if(l1 > 0) {
+                double norm1 = getParam(entry.getKey()).norm1Number().doubleValue();
+                l1Sum += l1 * norm1;
+            }
+        }
+
+        return l1Sum;
     }
 
     @Override
@@ -101,10 +130,18 @@ public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layer
 
         int[] kernel = layerConf().getKernelSize();
         int[] strides = layerConf().getStride();
-        int[] pad = layerConf().getPadding();
+        int[] pad;
+        int[] outSize;
+        if(convolutionMode == ConvolutionMode.Same){
+            outSize = ConvolutionUtils.getOutputSize(input, kernel, strides, null, convolutionMode);    //Also performs validation
+            pad = ConvolutionUtils.getSameModeTopLeftPadding(outSize, new int[]{inH, inW}, kernel, strides);
+        } else {
+            pad = layerConf().getPadding();
+            outSize = ConvolutionUtils.getOutputSize(input, kernel, strides, pad, convolutionMode);    //Also performs validation
+        }
 
-        int outH = Convolution.outSize(inH, kernel[0], strides[0], pad[0],false);
-        int outW = Convolution.outSize(inW, kernel[1], strides[1], pad[1], false);
+        int outH = outSize[0];
+        int outW = outSize[1];
 
 
         INDArray biasGradView = gradientViews.get(ConvolutionParamInitializer.BIAS_KEY);
@@ -114,19 +151,13 @@ public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layer
 
 
         INDArray delta;
-        String afn = conf.getLayer().getActivationFunction();
+        IActivation afn = conf.getLayer().getActivationFn();
 
-        if("identity".equals(afn)){
-            delta = epsilon;    //avoid doing .muli with 1s
-        } else {
-            INDArray sigmaPrimeZ = preOutput(true);
-            Nd4j.getExecutioner().execAndReturn(Nd4j.getOpFactory().createTransform(
-                    afn, sigmaPrimeZ, conf.getExtraArgs()).derivative());
-            delta = sigmaPrimeZ.muli(epsilon);  //Current shape: [miniBatch,outD,outH,outW]
-        }
+        delta = conf().getLayer().getActivationFn().backprop(preOutput(true), epsilon).getFirst();  //TODO handle activation function params
 
-        if (helper != null) {
-            Pair<Gradient, INDArray> ret = helper.backpropGradient(input, weights, delta, kernel, strides, pad, biasGradView, weightGradView, afn, layerConf().getCudnnAlgoMode());
+        if (helper != null && Nd4j.dataType() != DataBuffer.Type.HALF) {
+            Pair<Gradient, INDArray> ret = helper.backpropGradient(input, weights, delta, kernel, strides, pad, biasGradView, weightGradView, afn,
+                    layerConf().getCudnnAlgoMode(), convolutionMode);
             if (ret != null) {
                 return ret;
             }
@@ -143,7 +174,7 @@ public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layer
         //to get old order from required order: permute(0,3,4,5,1,2)
         INDArray col = Nd4j.createUninitialized(new int[]{miniBatch,outH,outW,inDepth,kH,kW},'c');
         INDArray col2 = col.permute(0,3,4,5,1,2);
-        Convolution.im2col(input, kH, kW, strides[0], strides[1], pad[0], pad[1], false, col2);
+        Convolution.im2col(input, kH, kW, strides[0], strides[1], pad[0], pad[1], convolutionMode == ConvolutionMode.Same, col2);
 
         //Shape im2col to 2d. Due to the permuting above, this should be a zero-copy reshape
         INDArray im2col2d = col.reshape('c', miniBatch*outH*outW, inDepth*kH*kW);
@@ -188,24 +219,51 @@ public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layer
             weights = Dropout.applyDropConnect(this, ConvolutionParamInitializer.WEIGHT_KEY);
         }
 
+        //Input validation: expect rank 4 matrix
+        if(input.rank() != 4){
+            String layerName = conf.getLayer().getLayerName();
+            if(layerName == null) layerName  = "(not named)";
+            throw new DL4JInvalidInputException("Got rank " + input.rank() + " array as input to ConvolutionLayer (layer name = "
+                    + layerName + ", layer index = " + index + ") with shape " + Arrays.toString(input.shape()) + ". "
+                    + "Expected rank 4 array with shape [minibatchSize, layerInputDepth, inputHeight, inputWidth]."
+                    + (input.rank() == 2 ? " (Wrong input type (see InputType.convolutionalFlat()) or wrong data type?)" : "")
+            );
+        }
+
         int miniBatch = input.size(0);
-        int inH = input.size(2);
-        int inW = input.size(3);
 
         int outDepth = weights.size(0);
         int inDepth = weights.size(1);
+        if(input.size(1) != inDepth){
+            String layerName = conf.getLayer().getLayerName();
+            if(layerName == null) layerName  = "(not named)";
+            throw new DL4JInvalidInputException("Cannot do forward pass in Convolution layer (layer name = " + layerName + ", layer index = " + index
+                    + "): input array depth does not match CNN layer configuration"
+                    + " (data input depth = " + input.size(1) + ", [minibatch,inputDepth,height,width]=" + Arrays.toString(input.shape()) + "; expected"
+                    + " input depth = " + inDepth + ")");
+        }
         int kH = weights.size(2);
         int kW = weights.size(3);
 
         int[] kernel = layerConf().getKernelSize();
         int[] strides = layerConf().getStride();
-        int[] pad = layerConf().getPadding();
 
-        int outH = Convolution.outSize(inH, kernel[0], strides[0], pad[0],false);
-        int outW = Convolution.outSize(inW, kernel[1], strides[1], pad[1], false);
+        int[] pad;
+        int[] outSize;
+        if(convolutionMode == ConvolutionMode.Same){
+            outSize = ConvolutionUtils.getOutputSize(input, kernel, strides, null, convolutionMode);    //Also performs validation
+            pad = ConvolutionUtils.getSameModeTopLeftPadding(outSize, new int[]{input.size(2), input.size(3)}, kernel, strides);
+        } else {
+            pad = layerConf().getPadding();
+            outSize = ConvolutionUtils.getOutputSize(input, kernel, strides, pad, convolutionMode);    //Also performs validation
+        }
 
-        if (helper != null) {
-            INDArray ret = helper.preOutput(input, weights, bias, kernel, strides, pad, layerConf().getCudnnAlgoMode());
+        int outH = outSize[0];
+        int outW = outSize[1];
+
+
+        if (helper != null && Nd4j.dataType() != DataBuffer.Type.HALF) {
+            INDArray ret = helper.preOutput(input, weights, bias, kernel, strides, pad, layerConf().getCudnnAlgoMode(), convolutionMode);
             if (ret != null) {
                 return ret;
             }
@@ -217,7 +275,7 @@ public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layer
         //Post reshaping: rows are such that minibatch varies slowest, outW fastest as we step through the rows post-reshape
         INDArray col = Nd4j.createUninitialized(new int[]{miniBatch,outH,outW,inDepth,kH,kW},'c');
         INDArray col2 = col.permute(0,3,4,5,1,2);
-        Convolution.im2col(input, kH, kW, strides[0], strides[1], pad[0], pad[1], false, col2);
+        Convolution.im2col(input, kH, kW, strides[0], strides[1], pad[0], pad[1], convolutionMode == ConvolutionMode.Same, col2);
 
         INDArray reshapedCol = Shape.newShapeNoCopy(col,new int[]{miniBatch*outH*outW, inDepth*kH*kW},false);
 
@@ -245,25 +303,28 @@ public class ConvolutionLayer extends BaseLayer<org.deeplearning4j.nn.conf.layer
         applyDropOutIfNecessary(training);
 
         INDArray z = preOutput(training);
-        String afn = conf.getLayer().getActivationFunction();
-        if("identity".equals(afn)){
-            return z;
-        }
+        //String afn = conf.getLayer().getActivationFunction();
+        IActivation afn = conf.getLayer().getActivationFn();
 
-        if (helper != null) {
-            INDArray ret = helper.activate(z, conf.getLayer().getActivationFunction());
+        if (helper != null && Nd4j.dataType() != DataBuffer.Type.HALF) {
+            INDArray ret = helper.activate(z, conf.getLayer().getActivationFn());
             if (ret != null) {
                 return ret;
             }
         }
 
-        INDArray activation = Nd4j.getExecutioner().execAndReturn(Nd4j.getOpFactory().createTransform(afn, z));
+        INDArray activation = afn.getActivation(z, training);
         return activation;
     }
 
     @Override
     public Layer transpose(){
         throw new UnsupportedOperationException("Not yet implemented");
+    }
+
+    @Override
+    public boolean isPretrainLayer() {
+        return false;
     }
 
 

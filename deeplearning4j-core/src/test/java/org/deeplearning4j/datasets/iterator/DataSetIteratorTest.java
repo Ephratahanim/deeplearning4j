@@ -41,40 +41,33 @@ import static org.junit.Assert.*;
 public class DataSetIteratorTest {
 	
 	@Test
-	public void testBatchSizeOfOne() throws Exception {
+	public void testBatchSizeOfOneIris() throws Exception {
 		//Test for (a) iterators returning correct number of examples, and
 		//(b) Labels are a proper one-hot vector (i.e., sum is 1.0)
 		
 		//Iris:
 		DataSetIterator iris = new IrisDataSetIterator(1, 5);
 		int irisC = 0;
-		while(iris.hasNext()){
+		while (iris.hasNext()) {
 			irisC++;
 			DataSet ds = iris.next();
-			assertTrue(ds.getLabels().sum(Integer.MAX_VALUE).getDouble(0)==1.0);
+			assertTrue(ds.getLabels().sum(Integer.MAX_VALUE).getDouble(0) == 1.0);
 		}
 		assertEquals(5, irisC);
-		
-		
+	}
+
+	@Test
+	public void testBatchSizeOfOneMnist() throws Exception {
+
 		//MNIST:
 		DataSetIterator mnist = new MnistDataSetIterator(1, 5);
 		int mnistC = 0;
-		while(mnist.hasNext()){
+		while (mnist.hasNext()) {
 			mnistC++;
 			DataSet ds = mnist.next();
 			assertTrue(ds.getLabels().sum(Integer.MAX_VALUE).getDouble(0)==1.0);
 		}
 		assertEquals(5, mnistC);
-		
-		//LFW:
-		DataSetIterator lfw = new LFWDataSetIterator(1, 5);
-		int lfwC = 0;
-		while(lfw.hasNext()){
-			lfwC++;
-			DataSet ds = lfw.next();
-			assertTrue(ds.getLabels().sum(Integer.MAX_VALUE).getDouble(0)==1.0);
-		}
-		assertEquals(5, lfwC);
 	}
 
 	@Test
@@ -169,7 +162,7 @@ public class DataSetIteratorTest {
 
 	@Test
 	public void testCifarIterator() throws Exception {
-		int numExamples = 10;
+		int numExamples = 1;
 		int row = 28;
 		int col = 28;
 		int channels = 1;
@@ -177,23 +170,31 @@ public class DataSetIteratorTest {
 		assertTrue(iter.hasNext());
 		DataSet data = iter.next();
 		assertEquals(numExamples, data.getLabels().size(0));
-		assertEquals(channels*row*col, data.getFeatureMatrix().size(1));
+		assertEquals(channels*row*col, data.getFeatureMatrix().ravel().length());
 	}
 
 
 	@Test
-	public void testCifarModel() throws Exception{
+	public void testCifarModel() throws Exception {
+		// Streaming
+		runCifar(false);
+
+		// Preprocess
+		runCifar(true);
+	}
+
+	public void runCifar(boolean preProcessCifar) throws Exception{
 		final int height = 32;
 		final int width = 32;
 		int channels = 3;
 		int outputNum = CifarLoader.NUM_LABELS;
-		int numSamples = 100;
+		int numSamples = 10;
 		int batchSize = 5;
 		int iterations = 1;
 		int seed = 123;
 		int listenerFreq = iterations;
 
-		CifarDataSetIterator cifar = new CifarDataSetIterator(batchSize, numSamples, true);
+		CifarDataSetIterator cifar = new CifarDataSetIterator(batchSize, numSamples, new int[] {height, width, channels}, preProcessCifar, true);
 
 		MultiLayerConfiguration.Builder builder = new NeuralNetConfiguration.Builder()
 				.seed(seed)
@@ -224,14 +225,14 @@ public class DataSetIteratorTest {
 
 		model.fit(cifar);
 
-		cifar = new CifarDataSetIterator(batchSize, numSamples, false);
+		cifar.test(10);
 		Evaluation eval = new Evaluation(cifar.getLabels());
 		while(cifar.hasNext()) {
 			DataSet testDS = cifar.next(batchSize);
 			INDArray output = model.output(testDS.getFeatureMatrix());
 			eval.eval(testDS.getLabels(), output);
 		}
-		System.out.println(eval.stats());
+		System.out.println(eval.stats(true));
 	}
 
 

@@ -43,7 +43,12 @@ import java.io.Serializable;
         @JsonSubTypes.Type(value = LayerVertex.class, name = "LayerVertex"),
         @JsonSubTypes.Type(value = LastTimeStepVertex.class, name = "LastTimeStepVertex"),
         @JsonSubTypes.Type(value = DuplicateToTimeSeriesVertex.class, name = "DuplicateToTimeSeriesVertex"),
-        @JsonSubTypes.Type(value = PreprocessorVertex.class, name = "PreprocessorVertex")
+        @JsonSubTypes.Type(value = PreprocessorVertex.class, name = "PreprocessorVertex"),
+        @JsonSubTypes.Type(value = StackVertex.class, name = "StackVertex"),
+        @JsonSubTypes.Type(value = UnstackVertex.class, name = "UnstackVertex"),
+        @JsonSubTypes.Type(value = L2Vertex.class, name = "L2Vertex"),
+        @JsonSubTypes.Type(value = ScaleVertex.class, name = "ScaleVertex"),
+        @JsonSubTypes.Type(value = L2NormalizeVertex.class, name = "L2NormalizeVertex")
 })
 public abstract class GraphVertex implements Cloneable, Serializable {
 
@@ -77,10 +82,11 @@ public abstract class GraphVertex implements Cloneable, Serializable {
      * processing or modifications of the inputs, the output types can be quite different to the input type(s).<br>
      * This is generally used to determine when to add preprocessors, as well as the input sizes etc for layers
      *
+     * @param layerIndex The index of the layer (if appropriate/necessary).
      * @param vertexInputs The inputs to this vertex
      * @return The type of output for this vertex
      * @throws InvalidInputTypeException If the input type is invalid for this type of GraphVertex
      */
-    public abstract InputType getOutputType(InputType... vertexInputs) throws InvalidInputTypeException;
+    public abstract InputType getOutputType(int layerIndex, InputType... vertexInputs) throws InvalidInputTypeException;
 
 }

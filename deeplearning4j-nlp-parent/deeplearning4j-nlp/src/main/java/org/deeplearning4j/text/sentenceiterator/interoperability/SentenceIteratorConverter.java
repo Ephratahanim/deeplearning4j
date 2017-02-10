@@ -9,6 +9,8 @@ import org.deeplearning4j.text.sentenceiterator.labelaware.LabelAwareSentenceIte
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
+
 /**
  * Simple class providing compatibility between SentenceIterator/LabelAwareSentenceIterator and LabelAwareIterator
  *
@@ -40,10 +42,20 @@ public class SentenceIteratorConverter implements LabelAwareIterator {
 
         document.setContent(backendIterator.nextSentence());
         if (backendIterator instanceof LabelAwareSentenceIterator) {
-            String currentLabel = ((LabelAwareSentenceIterator) backendIterator).currentLabel();
-            document.setLabel(currentLabel);
-            generator.storeLabel(currentLabel);
-        } else if (generator != null) document.setLabel(generator.nextLabel());
+            List<String> labels = ((LabelAwareSentenceIterator) backendIterator).currentLabels();
+            if (labels != null) {
+                for (String label: labels) {
+                    document.addLabel(label);
+                    generator.storeLabel(label);
+                }
+            } else {
+                String label = ((LabelAwareSentenceIterator) backendIterator).currentLabel();
+                if (labels != null) {
+                    document.addLabel(label);
+                    generator.storeLabel(label);
+                }
+            }
+        } else if (generator != null) document.addLabel(generator.nextLabel());
 
         return document;
     }
@@ -55,7 +67,27 @@ public class SentenceIteratorConverter implements LabelAwareIterator {
     }
 
     @Override
+    public boolean hasNext() {
+        return hasNextDocument();
+    }
+
+    @Override
+    public LabelledDocument next() {
+        return nextDocument();
+    }
+
+    @Override
+    public void remove() {
+        // no-op
+    }
+
+    @Override
     public LabelsSource getLabelsSource() {
         return generator;
+    }
+
+    @Override
+    public void shutdown() {
+        // no-op
     }
 }

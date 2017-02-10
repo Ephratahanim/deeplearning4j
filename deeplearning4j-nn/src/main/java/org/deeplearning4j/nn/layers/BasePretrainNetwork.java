@@ -23,18 +23,16 @@ import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.gradient.DefaultGradient;
 import org.deeplearning4j.nn.gradient.Gradient;
+import org.deeplearning4j.nn.params.DefaultParamInitializer;
 import org.deeplearning4j.nn.params.PretrainParamInitializer;
+import org.deeplearning4j.optimize.api.IterationListener;
+import org.deeplearning4j.optimize.api.TrainingListener;
 import org.nd4j.linalg.api.ndarray.INDArray;
-import org.nd4j.linalg.api.ops.LossFunction;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.indexing.NDArrayIndex;
-import org.nd4j.linalg.lossfunctions.LossCalculation;
-import org.nd4j.linalg.lossfunctions.LossFunctions;
+import org.nd4j.linalg.lossfunctions.ILossFunction;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 
 /**
@@ -46,6 +44,8 @@ import java.util.Set;
 public abstract class BasePretrainNetwork<LayerConfT extends org.deeplearning4j.nn.conf.layers.BasePretrainNetwork>
         extends BaseLayer<LayerConfT> {
 
+    protected Collection<TrainingListener> trainingListeners = null;
+
     public BasePretrainNetwork(NeuralNetConfiguration conf) {
         super(conf);
     }
@@ -54,6 +54,28 @@ public abstract class BasePretrainNetwork<LayerConfT extends org.deeplearning4j.
         super(conf, input);
     }
 
+
+    @Override
+    public void setListeners(Collection<IterationListener> listeners) {
+        if (iterationListeners == null) iterationListeners = new ArrayList<>();
+        else iterationListeners.clear();
+        if (trainingListeners == null) trainingListeners = new ArrayList<>();
+        else trainingListeners.clear();
+
+        if(listeners != null && listeners.size() > 0) {
+            iterationListeners.addAll(listeners);
+            for (IterationListener il : listeners) {
+                if (il instanceof TrainingListener) {
+                    trainingListeners.add((TrainingListener) il);
+                }
+            }
+        }
+    }
+
+    @Override
+    public void setListeners(IterationListener... listeners) {
+        setListeners(Arrays.asList(listeners));
+    }
 
     /**
      * Corrupts the given input by doing a binomial sampling
@@ -79,16 +101,7 @@ public abstract class BasePretrainNetwork<LayerConfT extends org.deeplearning4j.
 
     @Override
     public int numParams(boolean backwards) {
-        if(!backwards)
-            return super.numParams(backwards);
-        int ret = 0;
-        for(String s : paramTable().keySet()) {
-            if(!s.equals(PretrainParamInitializer.VISIBLE_BIAS_KEY)) {
-                ret += getParam(s).length();
-            }
-        }
-
-        return ret;
+        return super.numParams(backwards);
     }
 
     /**
@@ -107,29 +120,31 @@ public abstract class BasePretrainNetwork<LayerConfT extends org.deeplearning4j.
 
     @Override
     protected void setScoreWithZ(INDArray z) {
-        if (layerConf().getLossFunction() == LossFunctions.LossFunction.CUSTOM) {
-            LossFunction create = Nd4j.getOpFactory().createLossFunction(layerConf().getCustomLossFunction(), input, z);
-            create.exec();
-            score = create.getFinalResult().doubleValue();
-        }
+        if( input == null || z == null)
+            throw new IllegalStateException("Cannot calculate score without input and labels");
+        ILossFunction lossFunction = layerConf().getLossFunction().getILossFunction();
 
-        else {
-            score = LossCalculation.builder()
-                    .l1(calcL1()).l2(calcL2())
-                    .labels(input).z(z).lossFunction(layerConf().getLossFunction())
-                    .miniBatch(conf.isMiniBatch()).miniBatchSize(input.size(0))
-                    .useRegularization(conf.isUseRegularization()).build().score();
-        }
+        //double score = lossFunction.computeScore(input, z, layerConf().getActivationFunction(), maskArray, false);
+        double score = lossFunction.computeScore(input, z, layerConf().getActivationFn(), maskArray, false);
+        score += calcL1(false) + calcL2(false);
+        score /= getInputMiniBatchSize();
+
+        this.score = score;
+    }
+
+    @Override
+    public Map<String,INDArray> paramTable(boolean backpropParamsOnly){
+        if(!backpropParamsOnly) return params;
+        Map<String,INDArray> map = new LinkedHashMap<>();
+        map.put(PretrainParamInitializer.WEIGHT_KEY, params.get(PretrainParamInitializer.WEIGHT_KEY));
+        map.put(PretrainParamInitializer.BIAS_KEY, params.get(PretrainParamInitializer.BIAS_KEY));
+        return map;
     }
 
     public INDArray params() {
-        return params(false);
-    }
-
-    public INDArray params(boolean backprop){
         List<INDArray> list = new ArrayList<>(2);
         for(Map.Entry<String,INDArray> entry : params.entrySet()){
-            if(!backprop || !PretrainParamInitializer.VISIBLE_BIAS_KEY.equals(entry.getKey())) list.add(entry.getValue());
+            list.add(entry.getValue());
         }
         return Nd4j.toFlattened('f', list);
     }
@@ -140,7 +155,6 @@ public abstract class BasePretrainNetwork<LayerConfT extends org.deeplearning4j.
     public int numParams() {
         int ret = 0;
         for(Map.Entry<String,INDArray> entry : params.entrySet()){
-            if(PretrainParamInitializer.VISIBLE_BIAS_KEY.equals(entry.getKey())) continue;
             ret += entry.getValue().length();
         }
         return ret;
@@ -154,37 +168,49 @@ public abstract class BasePretrainNetwork<LayerConfT extends org.deeplearning4j.
         //pretrain = 3 sets of params (inc. visible bias); backprop = 2
 
         List<String> parameterList = conf.variables();
-        int lengthPretrain = 0;
-        int lengthBackprop = 0;
+        int paramLength = 0;
         for(String s : parameterList) {
             int len = getParam(s).length();
-            lengthPretrain += len;
-            if(!PretrainParamInitializer.VISIBLE_BIAS_KEY.equals(s)) lengthBackprop += len;
+            paramLength += len;
         }
 
-        boolean pretrain = params.length() == lengthPretrain;
-        if( !pretrain && params.length() != lengthBackprop ) {
-            throw new IllegalArgumentException("Unable to set parameters: must be of length " + lengthPretrain + " for pretrain, "
-                + " or " + lengthBackprop + " for backprop. Is: " + params.length());
+        if(params.length() != paramLength) {
+            throw new IllegalArgumentException("Unable to set parameters: must be of length " + paramLength);
         }
 
-        if(!pretrain){
-            paramsFlattened.assign(params);
-            return;
+        // Set for backprop and only W & hb
+        paramsFlattened.assign(params);
+
+    }
+
+    public Pair<Gradient,INDArray> backpropGradient(INDArray epsilon) {
+        Pair<Gradient,INDArray> result = super.backpropGradient(epsilon);
+        INDArray vBiasGradient = gradientViews.get(PretrainParamInitializer.VISIBLE_BIAS_KEY);
+        result.getFirst().gradientForVariable().put(PretrainParamInitializer.VISIBLE_BIAS_KEY, vBiasGradient);
+        return result;
+    }
+
+
+    @Override
+    public double calcL2(boolean backpropParamsOnly) {
+        if(!conf.isUseRegularization() || conf.getLayer().getL2() <= 0.0 ) return 0.0;
+        double l2Sum = super.calcL2(true);
+        if(backpropParamsOnly) return l2Sum;
+        if(conf.getL2ByParam(PretrainParamInitializer.VISIBLE_BIAS_KEY) > 0){
+            double l2Norm = getParam(PretrainParamInitializer.VISIBLE_BIAS_KEY).norm2Number().doubleValue();
+            l2Sum += 0.5 * conf.getL2ByParam(PretrainParamInitializer.VISIBLE_BIAS_KEY) * l2Norm * l2Norm;
         }
+        return l2Sum;
+    }
 
-        int idx = 0;
-        Set<String> paramKeySet = this.params.keySet();
-        for(String s : paramKeySet) {
-            INDArray param = getParam(s);
-            INDArray get = params.get(NDArrayIndex.point(0),NDArrayIndex.interval(idx, idx + param.length()));
-            if(param.length() != get.length())
-                throw new IllegalStateException("Parameter " + s + " should have been of length " + param.length() + " but was " + get.length());
-            param.assign(get.reshape('f',param.shape()));  //Use assign due to backprop params being a view of a larger array
-            idx += param.length();
-
+    @Override
+    public double calcL1(boolean backpropParamsOnly) {
+        if(!conf.isUseRegularization() || conf.getLayer().getL1()  <= 0.0 ) return 0.0;
+        double l1Sum = super.calcL1(true);
+        if(conf.getL1ByParam(PretrainParamInitializer.VISIBLE_BIAS_KEY) > 0){
+            l1Sum += conf.getLayer().getL1() * getParam(PretrainParamInitializer.VISIBLE_BIAS_KEY).norm1Number().doubleValue();
         }
-
+        return l1Sum;
     }
 
 }

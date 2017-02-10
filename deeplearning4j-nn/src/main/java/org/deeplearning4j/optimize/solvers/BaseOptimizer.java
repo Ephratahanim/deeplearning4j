@@ -23,16 +23,16 @@ import org.deeplearning4j.exception.InvalidStepException;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.Model;
 import org.deeplearning4j.nn.api.Updater;
+import org.deeplearning4j.nn.conf.ComputationGraphConfiguration;
 import org.deeplearning4j.nn.conf.LearningRatePolicy;
+import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.graph.ComputationGraph;
+import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.updater.UpdaterCreator;
 import org.deeplearning4j.nn.updater.graph.ComputationGraphUpdater;
-import org.deeplearning4j.optimize.api.ConvexOptimizer;
-import org.deeplearning4j.optimize.api.IterationListener;
-import org.deeplearning4j.optimize.api.StepFunction;
-import org.deeplearning4j.optimize.api.TerminationCondition;
+import org.deeplearning4j.optimize.api.*;
 import org.deeplearning4j.optimize.stepfunctions.NegativeDefaultStepFunction;
 import org.deeplearning4j.optimize.stepfunctions.NegativeGradientStepFunction;
 import org.deeplearning4j.optimize.terminations.EpsTermination;
@@ -51,7 +51,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public abstract class BaseOptimizer implements ConvexOptimizer {
 
     protected NeuralNetConfiguration conf;
-    protected int iteration = 0;
     protected static final Logger log = LoggerFactory.getLogger(BaseOptimizer.class);
     protected StepFunction stepFunction;
     protected Collection<IterationListener> iterationListeners = new ArrayList<>();
@@ -150,6 +149,15 @@ public abstract class BaseOptimizer implements ConvexOptimizer {
     public Pair<Gradient,Double> gradientAndScore() {
         oldScore = score;
         model.computeGradientAndScore();
+
+        if(iterationListeners != null && iterationListeners.size() > 0){
+            for(IterationListener l : iterationListeners){
+                if(l instanceof TrainingListener){
+                    ((TrainingListener)l).onGradientCalculation(model);
+                }
+            }
+        }
+
         Pair<Gradient,Double> pair = model.gradientAndScore();
         score = pair.getSecond();
         updateGradientAccordingToParams(pair.getFirst(), model, model.batchSize());
@@ -222,7 +230,7 @@ public abstract class BaseOptimizer implements ConvexOptimizer {
 
             //check for termination conditions based on absolute change in score
             checkTerminalConditions(pair.getFirst().gradient(), oldScore, score, i);
-            this.iteration++;
+            incrementIterationCount(model, 1);
         }
         return true;
     }
@@ -279,13 +287,13 @@ public abstract class BaseOptimizer implements ConvexOptimizer {
             if(computationGraphUpdater == null){
                 computationGraphUpdater = new ComputationGraphUpdater(graph);
             }
-            computationGraphUpdater.update(graph, gradient, iteration, batchSize);
+            computationGraphUpdater.update(graph, gradient, getIterationCount(model), batchSize);
         } else {
 
             if (updater == null)
                 updater = UpdaterCreator.getUpdater(model);
             Layer layer = (Layer) model;
-            updater.update(layer, gradient, iteration, batchSize);
+            updater.update(layer, gradient, getIterationCount(model), batchSize);
         }
     }
 
@@ -308,6 +316,28 @@ public abstract class BaseOptimizer implements ConvexOptimizer {
             return new NegativeGradientStepFunction();
         } else {
             return new NegativeDefaultStepFunction();
+        }
+    }
+
+    public static int getIterationCount(Model model){
+        if(model instanceof MultiLayerNetwork){
+            return ((MultiLayerNetwork)model).getLayerWiseConfigurations().getIterationCount();
+        } else if(model instanceof ComputationGraph){
+            return ((ComputationGraph)model).getConfiguration().getIterationCount();
+        } else {
+            return model.conf().getIterationCount();
+        }
+    }
+
+    public static void incrementIterationCount(Model model, int incrementBy){
+        if(model instanceof MultiLayerNetwork){
+            MultiLayerConfiguration conf = ((MultiLayerNetwork)model).getLayerWiseConfigurations();
+            conf.setIterationCount(conf.getIterationCount() + incrementBy);
+        } else if(model instanceof ComputationGraph){
+            ComputationGraphConfiguration conf = ((ComputationGraph)model).getConfiguration();
+            conf.setIterationCount(conf.getIterationCount() + incrementBy);
+        } else {
+            model.conf().setIterationCount(model.conf().getIterationCount() + incrementBy);
         }
     }
 

@@ -19,13 +19,17 @@
 package org.deeplearning4j.datasets.datavec;
 
 import lombok.Getter;
+import lombok.Setter;
 import org.datavec.api.io.WritableConverter;
 import org.datavec.api.io.converters.SelfWritableConverter;
 import org.datavec.api.io.converters.WritableConverterException;
+import org.datavec.api.records.Record;
+import org.datavec.api.records.metadata.RecordMetaData;
 import org.datavec.api.records.reader.RecordReader;
 import org.datavec.api.records.reader.SequenceRecordReader;
 import org.datavec.api.writable.Writable;
 import org.datavec.common.data.NDArrayWritable;
+import org.deeplearning4j.exception.DL4JInvalidInputException;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.DataSetPreProcessor;
@@ -33,7 +37,9 @@ import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.util.FeatureUtil;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -58,6 +64,9 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
     protected boolean regression = false;
     @Getter protected DataSetPreProcessor preProcessor;
 
+    @Getter @Setter
+    private boolean collectMetaData = false;
+
     public RecordReaderDataSetIterator(RecordReader recordReader, WritableConverter converter, int batchSize) {
         this(recordReader, converter, batchSize, -1,
                 recordReader.getLabels() == null? -1 : recordReader.getLabels().size());
@@ -68,6 +77,15 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
                 recordReader.getLabels() == null? -1 : recordReader.getLabels().size());
     }
 
+    /**
+     * Main constructor for classification. This will convert the input class index (at position labelIndex, with integer
+     * values 0 to numPossibleLabels-1 inclusive) to the appropriate one-hot output/labels representation.
+     *
+     * @param recordReader         RecordReader: provides the source of the data
+     * @param batchSize            Batch size (number of examples) for the output DataSet objects
+     * @param labelIndex           Index of the label Writable (usually an IntWritable), as obtained by recordReader.next()
+     * @param numPossibleLabels    Number of classes (possible labels) for classification
+     */
     public RecordReaderDataSetIterator(RecordReader recordReader, int batchSize, int labelIndex, int numPossibleLabels) {
         this(recordReader, new SelfWritableConverter(), batchSize, labelIndex, numPossibleLabels);
     }
@@ -137,6 +155,7 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
         }
 
         List<DataSet> dataSets = new ArrayList<>();
+        List<RecordMetaData> meta = (collectMetaData ? new ArrayList<RecordMetaData>() : null);
         for (int i = 0; i < num; i++) {
             if (!hasNext())
                 break;
@@ -149,8 +168,14 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
                 List<Writable> record = sequenceIter.next();
                 dataSets.add(getDataSet(record));
             } else {
-                List<Writable> record = recordReader.next();
-                dataSets.add(getDataSet(record));
+                if(collectMetaData){
+                    Record record = recordReader.nextRecord();
+                    dataSets.add(getDataSet(record.getRecord()));
+                    meta.add(record.getMetaData());
+                } else {
+                    List<Writable> record = recordReader.next();
+                    dataSets.add(getDataSet(record));
+                }
             }
         }
         batchNum++;
@@ -159,6 +184,9 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
             return new DataSet();
 
         DataSet ret = DataSet.merge(dataSets);
+        if(collectMetaData){
+            ret.setExampleMetaData(meta);
+        }
         last = ret;
         if (preProcessor != null) preProcessor.preProcess(ret);
         //Add label name values to dataset
@@ -170,7 +198,7 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
     private DataSet getDataSet(List<Writable> record) {
         List<Writable> currList;
         if (record instanceof List)
-            currList = (List<Writable>) record;
+            currList = record;
         else
             currList = new ArrayList<>(record);
 
@@ -190,10 +218,15 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
             return new DataSet(writable.get(),writable.get());
         }
         if(currList.size() == 2 && currList.get(0) instanceof NDArrayWritable) {
-            if(!regression)
-                label = FeatureUtil.toOutcomeVector((int) Double.parseDouble(currList.get(1).toString()),numPossibleLabels);
-            else
-                label = Nd4j.scalar(Double.parseDouble(currList.get(1).toString()));
+            if(!regression) {
+                label = FeatureUtil.toOutcomeVector((int) Double.parseDouble(currList.get(1).toString()), numPossibleLabels);
+            } else {
+                if(currList.get(1) instanceof NDArrayWritable){
+                    label = ((NDArrayWritable) currList.get(1)).get();
+                } else {
+                    label = Nd4j.scalar(currList.get(1).toDouble());
+                }
+            }
             NDArrayWritable ndArrayWritable = (NDArrayWritable) currList.get(0);
             featureVector = ndArrayWritable.get();
             return new DataSet(featureVector,label);
@@ -205,7 +238,10 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
             if (!(current instanceof  NDArrayWritable) && current.toString().isEmpty())
                 continue;
 
-            if (regression && j >= labelIndex && j <= labelIndexTo) {
+            if(regression && j == labelIndex && j == labelIndexTo && current instanceof NDArrayWritable ){
+                //Case: NDArrayWritable for the labels
+                label = ((NDArrayWritable) current).get();
+            } else if (regression && j >= labelIndex && j <= labelIndexTo) {
                 //This is the multi-label regression case
                 if (label == null) label = Nd4j.create(1, (labelIndexTo - labelIndex + 1));
                 label.putScalar(labelCount++, current.toDouble());
@@ -223,8 +259,11 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
                     label = Nd4j.scalar(current.toDouble());
                 } else {
                     int curr = current.toInt();
-                    if (curr >= numPossibleLabels)
-                        curr--;
+                    if (curr < 0 || curr >= numPossibleLabels) {
+                        throw new DL4JInvalidInputException("Invalid classification data: expect label value (at label index column = " + labelIndex
+                            + ") to be in range 0 to " + (numPossibleLabels-1) + " inclusive (0 to numClasses-1, with numClasses=" + numPossibleLabels
+                            + "); got label value of " + current);
+                    }
                     label = FeatureUtil.toOutcomeVector(curr, numPossibleLabels);
                 }
             } else {
@@ -343,4 +382,44 @@ public class RecordReaderDataSetIterator implements DataSetIterator {
         return recordReader.getLabels();
     }
 
+    /**
+     * Load a single example to a DataSet, using the provided RecordMetaData.
+     * Note that it is more efficient to load multiple instances at once, using {@link #loadFromMetaData(List)}
+     *
+     * @param recordMetaData RecordMetaData to load from. Should have been produced by the given record reader
+     * @return DataSet with the specified example
+     * @throws IOException If an error occurs during loading of the data
+     */
+    public DataSet loadFromMetaData(RecordMetaData recordMetaData) throws IOException {
+        return loadFromMetaData(Collections.singletonList(recordMetaData));
+    }
+
+    /**
+     * Load a multiple examples to a DataSet, using the provided RecordMetaData instances.
+     *
+     * @param list List of RecordMetaData instances to load from. Should have been produced by the record reader provided
+     *             to the RecordReaderDataSetIterator constructor
+     * @return DataSet with the specified examples
+     * @throws IOException If an error occurs during loading of the data
+     */
+    public DataSet loadFromMetaData(List<RecordMetaData> list) throws IOException {
+        List<Record> records = recordReader.loadFromMetaData(list);
+        List<DataSet> dataSets = new ArrayList<>();
+        List<RecordMetaData> meta = new ArrayList<>();
+        for(Record r : records){
+            dataSets.add(getDataSet(r.getRecord()));
+            meta.add(r.getMetaData());
+        }
+
+        if(dataSets.isEmpty()) {
+            return new DataSet();
+        }
+
+        DataSet ret = DataSet.merge(dataSets);
+        ret.setExampleMetaData(meta);
+        last = ret;
+        if (preProcessor != null) preProcessor.preProcess(ret);
+        if (recordReader.getLabels() != null) ret.setLabelNames(recordReader.getLabels());
+        return ret;
+    }
 }

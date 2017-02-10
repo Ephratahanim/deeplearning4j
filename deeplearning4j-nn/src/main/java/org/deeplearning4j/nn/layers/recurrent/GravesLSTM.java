@@ -20,10 +20,13 @@ package org.deeplearning4j.nn.layers.recurrent;
 
 import org.deeplearning4j.berkeley.Pair;
 import org.deeplearning4j.nn.api.Layer;
+import org.deeplearning4j.nn.api.MaskState;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.gradient.Gradient;
 import org.deeplearning4j.nn.params.GravesLSTMParamInitializer;
 import org.nd4j.linalg.api.ndarray.INDArray;
+
+import java.util.Map;
 
 /**
  * LSTM layer implementation.
@@ -86,6 +89,7 @@ public class GravesLSTM extends BaseRecurrentLayer<org.deeplearning4j.nn.conf.la
 
 
         return LSTMHelpers.backpropGradientHelper(this.conf,
+                this.layerConf().getGateActivationFn(),
                 this.input,
                 recurrentWeights,
                 inputWeights,
@@ -97,7 +101,8 @@ public class GravesLSTM extends BaseRecurrentLayer<org.deeplearning4j.nn.conf.la
                 GravesLSTMParamInitializer.INPUT_WEIGHT_KEY,
                 GravesLSTMParamInitializer.RECURRENT_WEIGHT_KEY,
                 GravesLSTMParamInitializer.BIAS_KEY,
-                gradientViews);
+                gradientViews,
+                null);
     }
 
 
@@ -144,7 +149,9 @@ public class GravesLSTM extends BaseRecurrentLayer<org.deeplearning4j.nn.conf.la
         final INDArray inputWeights = getParam(GravesLSTMParamInitializer.INPUT_WEIGHT_KEY);            //Shape: [n^(L-1),4*hiddenLayerSize]; order: [wi,wf,wo,wg]
         final INDArray biases = getParam(GravesLSTMParamInitializer.BIAS_KEY); //by row: IFOG			//Shape: [4,hiddenLayerSize]; order: [bi,bf,bo,bg]^T
 
-        return LSTMHelpers.activateHelper(this,this.conf,this.input,recurrentWeights,inputWeights,biases,training,prevOutputActivations,prevMemCellState,forBackprop,true,GravesLSTMParamInitializer.INPUT_WEIGHT_KEY);
+        return LSTMHelpers.activateHelper(this, this.conf, this.layerConf().getGateActivationFn(), this.input,
+                recurrentWeights, inputWeights, biases, training, prevOutputActivations, prevMemCellState,
+                forBackprop, true, GravesLSTMParamInitializer.INPUT_WEIGHT_KEY, null);
     }
 
     @Override
@@ -163,24 +170,52 @@ public class GravesLSTM extends BaseRecurrentLayer<org.deeplearning4j.nn.conf.la
     }
 
     @Override
-    public double calcL2() {
-        if (!conf.isUseRegularization() || conf.getLayer().getL2() <= 0.0) return 0.0;
-
-        double l2Norm = getParam(GravesLSTMParamInitializer.RECURRENT_WEIGHT_KEY).norm2Number().doubleValue();
-        double sumSquaredWeights = l2Norm*l2Norm;
-
-        l2Norm = getParam(GravesLSTMParamInitializer.INPUT_WEIGHT_KEY).norm2Number().doubleValue();
-        sumSquaredWeights += l2Norm*l2Norm;
-
-        return 0.5 * conf.getLayer().getL2() * sumSquaredWeights;
+    public boolean isPretrainLayer() {
+        return false;
     }
 
     @Override
-    public double calcL1() {
+    public Pair<INDArray, MaskState> feedForwardMaskArray(INDArray maskArray, MaskState currentMaskState, int minibatchSize) {
+        //LSTM (standard, not bi-directional) don't make any changes to the data OR the mask arrays
+        //Any relevant masking occurs during backprop
+        //They also set the current mask array as inactive: this is for situations like the following:
+        // in -> dense -> lstm -> dense -> lstm
+        // The first dense should be masked using the input array, but the second shouldn't. If necessary, the second
+        // dense will be masked via the output layer mask
+
+        return new Pair<>(maskArray, MaskState.Passthrough);
+    }
+
+    @Override
+    public double calcL2(boolean backpropParamsOnly) {
+        if (!conf.isUseRegularization() || conf.getLayer().getL2() <= 0.0) return 0.0;
+
+        double l2Sum = 0.0;
+        for(Map.Entry<String,INDArray> entry : paramTable().entrySet()){
+            double l2 = conf.getL2ByParam(entry.getKey());
+            if(l2 > 0) {
+                double norm2 = getParam(entry.getKey()).norm2Number().doubleValue();
+                l2Sum += 0.5 * l2 * norm2 * norm2;
+            }
+        }
+
+        return l2Sum;
+    }
+
+    @Override
+    public double calcL1(boolean backpropParamsOnly) {
         if (!conf.isUseRegularization() || conf.getLayer().getL1() <= 0.0) return 0.0;
-        double l1 = getParam(GravesLSTMParamInitializer.RECURRENT_WEIGHT_KEY).norm1Number().doubleValue()
-                + getParam(GravesLSTMParamInitializer.INPUT_WEIGHT_KEY).norm1Number().doubleValue();
-        return conf.getLayer().getL1() * l1;
+
+        double l1Sum = 0.0;
+        for(Map.Entry<String,INDArray> entry : paramTable().entrySet()){
+            double l1 = conf.getL1ByParam(entry.getKey());
+            if(l1 > 0) {
+                double norm1 = getParam(entry.getKey()).norm1Number().doubleValue();
+                l1Sum += l1 * norm1;
+            }
+        }
+
+        return l1Sum;
     }
 
     @Override

@@ -10,6 +10,7 @@ import org.apache.commons.codec.binary.Base64;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -28,41 +29,59 @@ public class VectorsConfiguration implements Serializable {
     private double minLearningRate = 0.0001;
     private int layersSize = 200;
     private boolean useAdaGrad = false;
-    private int batchSize = 1000;
+    private int batchSize = 512;
     private int iterations = 1;
     private int epochs = 1;
     private int window = 5;
     private long seed;
     private double negative = 0.0d;
+    private boolean useHierarchicSoftmax = true;
     private double sampling = 0.0d;
     private int learningRateDecayWords;
     private int[] variableWindows;
 
     private boolean hugeModelExpected = false;
+    private boolean useUnknown = false;
+
     private int scavengerActivationThreshold = 2000000;
     private int scavengerRetentionDelay = 3;
 
     private String elementsLearningAlgorithm;
     private String sequenceLearningAlgorithm;
+    private String modelUtils;
+
+    private String tokenizerFactory;
+    private String tokenPreProcessor;
 
     private String UNK = "UNK";
     private String STOP = "STOP";
 
-    private List<String> stopList = new ArrayList<>();
+    private Collection<String> stopList = new ArrayList<>();
 
     // overall model info
     private int vocabSize;
 
+    // paravec-specific option
+    private boolean trainElementsVectors = true;
+    private boolean allowParallelTokenization = false;
+    private boolean preciseWeightInit = false;
+
+    private static ObjectMapper mapper;
+    private static final Object lock = new Object();
+
     private static ObjectMapper mapper() {
-        /*
-              DO NOT ENABLE INDENT_OUTPUT FEATURE
-              we need THIS json to be single-line
-          */
-        ObjectMapper ret = new ObjectMapper();
-        ret.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        ret.configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
-        ret.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
-        return ret;
+        if (mapper == null) {
+            synchronized (lock) {
+                if (mapper == null) {
+                    mapper = new ObjectMapper();
+                    mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+                    mapper.configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
+                    mapper.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
+                    return mapper;
+                }
+            }
+        }
+        return mapper;
     }
 
     public String toJson() {

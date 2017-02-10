@@ -31,6 +31,7 @@ import org.deeplearning4j.models.embeddings.wordvectors.WordVectors;
 import org.deeplearning4j.models.paragraphvectors.ParagraphVectors;
 import org.deeplearning4j.models.word2vec.VocabWord;
 import org.deeplearning4j.models.word2vec.Word2Vec;
+import org.deeplearning4j.models.word2vec.wordstore.VocabCache;
 import org.deeplearning4j.models.word2vec.wordstore.inmemory.AbstractCache;
 import org.deeplearning4j.models.word2vec.wordstore.inmemory.InMemoryLookupCache;
 import org.deeplearning4j.text.sentenceiterator.BasicLineIterator;
@@ -43,6 +44,7 @@ import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.nd4j.linalg.api.ndarray.INDArray;
+import org.nd4j.linalg.api.rng.DefaultRandom;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.ops.transforms.Transforms;
 import org.slf4j.Logger;
@@ -204,12 +206,18 @@ public class WordVectorSerializerTest {
 
         vec.fit();
 
+        VocabCache orig = vec.getVocab();
+
         File tempFile = File.createTempFile("temp", "w2v");
         tempFile.deleteOnExit();
 
         WordVectorSerializer.writeWordVectors(vec, tempFile);
 
         WordVectors vec2 = WordVectorSerializer.loadTxtVectors(tempFile);
+
+        VocabCache rest = vec2.vocab();
+
+        assertEquals(orig.totalNumberOfDocs(), rest.totalNumberOfDocs());
 
         for (VocabWord word: vec.getVocab().vocabWords()) {
             INDArray array1 = vec.getWordVectorMatrix(word.getLabel());
@@ -250,9 +258,9 @@ public class WordVectorSerializerTest {
         assertEquals(new ArrayList<String>(), vec.getStopWords());
         vec.fit();
 
-        logger.info("Original word 0: " + cache.wordFor(cache.wordAtIndex(0)));
+        //logger.info("Original word 0: " + cache.wordFor(cache.wordAtIndex(0)));
 
-        logger.info("Closest Words:");
+        //logger.info("Closest Words:");
         Collection<String> lst = vec.wordsNearest("day", 10);
         System.out.println(lst);
 
@@ -271,8 +279,8 @@ public class WordVectorSerializerTest {
 
         assertEquals(vec.getConfiguration(), vec2.getConfiguration());
 
-        logger.info("Source ExpTable: " + ArrayUtils.toString(((InMemoryLookupTable) table).getExpTable()));
-        logger.info("Dest  ExpTable: " + ArrayUtils.toString(((InMemoryLookupTable)  vec2.getLookupTable()).getExpTable()));
+        //logger.info("Source ExpTable: " + ArrayUtils.toString(((InMemoryLookupTable) table).getExpTable()));
+        //logger.info("Dest  ExpTable: " + ArrayUtils.toString(((InMemoryLookupTable)  vec2.getLookupTable()).getExpTable()));
         assertTrue(ArrayUtils.isEquals(((InMemoryLookupTable) table).getExpTable(), ((InMemoryLookupTable) vec2.getLookupTable()).getExpTable()));
 
 
@@ -302,8 +310,8 @@ public class WordVectorSerializerTest {
         INDArray rSyn0_1 = restoredTable.getSyn0().slice(1);
         INDArray oSyn0_1 = ((InMemoryLookupTable) table).getSyn0().slice(1);
 
-        logger.info("Restored syn0: " + rSyn0_1);
-        logger.info("Original syn0: " + oSyn0_1);
+        //logger.info("Restored syn0: " + rSyn0_1);
+        //logger.info("Original syn0: " + oSyn0_1);
 
         assertEquals(oSyn0_1, rSyn0_1);
 
@@ -321,8 +329,8 @@ public class WordVectorSerializerTest {
 
             assertEquals(rSyn1, oSyn1);
             if (arraysSimilarity(rSyn1, oSyn1) < 0.98) {
-                logger.info("Restored syn1: " + rSyn1);
-                logger.info("Original  syn1: " + oSyn1);
+             //   logger.info("Restored syn1: " + rSyn1);
+             //   logger.info("Original  syn1: " + oSyn1);
             }
             // we exclude word 222 since it has syn1 full of zeroes
             if (cnt != 222) assertEquals(1.0, arraysSimilarity(rSyn1, oSyn1), 0.001);
@@ -437,6 +445,13 @@ public class WordVectorSerializerTest {
         INDArray day2 = vec2.getWordVectorMatrix("day");
 
         assertEquals(day1, day2);
+
+        File tempFile = File.createTempFile("tetsts","Fdfs");
+        tempFile.deleteOnExit();
+
+        WordVectorSerializer.writeWord2VecModel(vec, tempFile);
+
+        Word2Vec vec3 = WordVectorSerializer.readWord2VecModel(tempFile);
     }
 
     @Test
@@ -451,7 +466,7 @@ public class WordVectorSerializerTest {
         AbstractCache<VocabWord> cache = new AbstractCache.Builder<VocabWord>().build();
 
         for (int i = 0; i < 100; i++) {
-            VocabWord word = new VocabWord(1.0f, "word_" + i);
+            VocabWord word = new VocabWord((float) i, "word_" + i);
             List<Integer> points = new ArrayList<>();
             List<Integer> codes = new ArrayList<>();
             int num = org.apache.commons.lang3.RandomUtils.nextInt(1,20);
@@ -498,6 +513,7 @@ public class WordVectorSerializerTest {
         for (int i = 0; i < cache.numWords(); i++) {
             assertEquals(cache.elementAtIndex(i).isLabel(), restoredVocab.elementAtIndex(i).isLabel());
             assertEquals(cache.wordAtIndex(i), restoredVocab.wordAtIndex(i));
+            assertEquals(cache.elementAtIndex(i).getElementFrequency(), restoredVocab.elementAtIndex(i).getElementFrequency(), 0.1f);
             List<Integer> originalPoints = cache.elementAtIndex(i).getPoints();
             List<Integer> restoredPoints = restoredVocab.elementAtIndex(i).getPoints();
             assertEquals(originalPoints.size(), restoredPoints.size());
@@ -522,6 +538,239 @@ public class WordVectorSerializerTest {
         if(vector == null || vector2 == null)
             return -1;
         return  Nd4j.getBlasWrapper().dot(vector, vector2);
+
+    }
+
+
+    /**
+     * This method here is only to test real google model few gigabytes worth
+     * Keep it ignored, since it requirs full google model being present in system, which is 1.6gb compressed
+     *
+     * @throws Exception
+     */
+    @Test
+    @Ignore
+    public void testStaticLoaderGoogleModel() throws Exception {
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        long time1 = System.currentTimeMillis();
+        WordVectors vectors = WordVectorSerializer.loadStaticModel(new File("C:\\Users\\raver\\develop\\GoogleNews-vectors-negative300.bin.gz"));
+        long time2 = System.currentTimeMillis();
+
+        logger.info("Loading time: {} ms", (time2 - time1));
+    }
+
+    /**
+     * This method tests binary file loading as static model
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testStaticLoaderBinary() throws Exception {
+
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        WordVectors vectorsLive = WordVectorSerializer.loadGoogleModel(binaryFile, true);
+        WordVectors vectorsStatic = WordVectorSerializer.loadStaticModel(binaryFile);
+
+        INDArray arrayLive = vectorsLive.getWordVectorMatrix("Morgan_Freeman");
+        INDArray arrayStatic = vectorsStatic.getWordVectorMatrix("Morgan_Freeman");
+
+        assertNotEquals(null, arrayLive);
+        assertEquals(arrayLive, arrayStatic);
+    }
+
+    /**
+     * This method tests CSV file loading as static model
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testStaticLoaderText() throws Exception {
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        WordVectors vectorsLive = WordVectorSerializer.loadTxtVectors(textFile);
+        WordVectors vectorsStatic = WordVectorSerializer.loadStaticModel(textFile);
+
+        INDArray arrayLive = vectorsLive.getWordVectorMatrix("Morgan_Freeman");
+        INDArray arrayStatic = vectorsStatic.getWordVectorMatrix("Morgan_Freeman");
+
+        assertNotEquals(null, arrayLive);
+        assertEquals(arrayLive, arrayStatic);
+    }
+
+    /**
+     * This method tests ZIP file loading as static model
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testStaticLoaderArchive() throws Exception {
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        File w2v = new ClassPathResource("word2vec.dl4j/file.w2v").getFile();
+
+        WordVectors vectorsLive = WordVectorSerializer.readWord2Vec(w2v);
+        WordVectors vectorsStatic = WordVectorSerializer.loadStaticModel(w2v);
+
+        INDArray arrayLive = vectorsLive.getWordVectorMatrix("night");
+        INDArray arrayStatic = vectorsStatic.getWordVectorMatrix("night");
+
+        assertNotEquals(null, arrayLive);
+        assertEquals(arrayLive, arrayStatic);
+    }
+
+    @Test
+    public void testUnifiedLoaderArchive1() throws Exception {
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        File w2v = new ClassPathResource("word2vec.dl4j/file.w2v").getFile();
+
+        WordVectors vectorsLive = WordVectorSerializer.readWord2Vec(w2v);
+        WordVectors vectorsUnified = WordVectorSerializer.readWord2VecModel(w2v, false);
+
+        INDArray arrayLive = vectorsLive.getWordVectorMatrix("night");
+        INDArray arrayStatic = vectorsUnified.getWordVectorMatrix("night");
+
+        assertNotEquals(null, arrayLive);
+        assertEquals(arrayLive, arrayStatic);
+
+        assertEquals(null, ((InMemoryLookupTable)vectorsUnified.lookupTable()).getSyn1());
+        assertEquals(null, ((InMemoryLookupTable)vectorsUnified.lookupTable()).getSyn1Neg());
+    }
+
+    @Test
+    public void testUnifiedLoaderArchive2() throws Exception {
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        File w2v = new ClassPathResource("word2vec.dl4j/file.w2v").getFile();
+
+        WordVectors vectorsLive = WordVectorSerializer.readWord2Vec(w2v);
+        WordVectors vectorsUnified = WordVectorSerializer.readWord2VecModel(w2v, true);
+
+        INDArray arrayLive = vectorsLive.getWordVectorMatrix("night");
+        INDArray arrayStatic = vectorsUnified.getWordVectorMatrix("night");
+
+        assertNotEquals(null, arrayLive);
+        assertEquals(arrayLive, arrayStatic);
+
+        assertNotEquals(null, ((InMemoryLookupTable)vectorsUnified.lookupTable()).getSyn1());
+    }
+
+    /**
+     * This method tests CSV file loading via unified loader
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testUnifiedLoaderText() throws Exception {
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        WordVectors vectorsLive = WordVectorSerializer.loadTxtVectors(textFile);
+        WordVectors vectorsUnified = WordVectorSerializer.readWord2VecModel(textFile, true);
+
+        INDArray arrayLive = vectorsLive.getWordVectorMatrix("Morgan_Freeman");
+        INDArray arrayStatic = vectorsUnified.getWordVectorMatrix("Morgan_Freeman");
+
+        assertNotEquals(null, arrayLive);
+        assertEquals(arrayLive, arrayStatic);
+
+        // we're trying EXTENDED model, but file doesn't have syn1/huffman info, so it should be silently degraded to simplified model
+        assertEquals(null, ((InMemoryLookupTable)vectorsUnified.lookupTable()).getSyn1());
+    }
+
+    /**
+     * This method tests binary file loading via unified loader
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testUnifiedLoaderBinary() throws Exception {
+
+        logger.info("Executor name: {}", Nd4j.getExecutioner().getClass().getSimpleName());
+
+        WordVectors vectorsLive = WordVectorSerializer.loadGoogleModel(binaryFile, true);
+        WordVectors vectorsStatic = WordVectorSerializer.readWord2VecModel(binaryFile, false);
+
+        INDArray arrayLive = vectorsLive.getWordVectorMatrix("Morgan_Freeman");
+        INDArray arrayStatic = vectorsStatic.getWordVectorMatrix("Morgan_Freeman");
+
+        assertNotEquals(null, arrayLive);
+        assertEquals(arrayLive, arrayStatic);
+    }
+
+    @Ignore
+    @Test
+    public void testBiggerParavecLoader() throws Exception {
+        ParagraphVectors vectors = WordVectorSerializer.readParagraphVectors("C:\\Users\\raver\\Downloads\\10kNews.zip");
+    }
+
+    @Test
+    public void testVocabPeristence() throws Exception {
+        // we build vocab save it, and confirm equality
+
+    }
+
+    @Test
+    public void testMalformedLabels1() throws Exception {
+        List<String> words = new ArrayList<>();
+        words.add("test A");
+        words.add("test B");
+        words.add("test\nC");
+        words.add("test`D");
+        words.add("test_E");
+        words.add("test 5");
+
+        AbstractCache<VocabWord> vocabCache = new AbstractCache<>();
+        int cnt = 0;
+        for(String word: words) {
+            vocabCache.addToken(new VocabWord(1.0, word));
+            vocabCache.addWordToIndex(cnt, word);
+            cnt++;
+        }
+
+        vocabCache.elementAtIndex(1).markAsLabel(true);
+
+        InMemoryLookupTable<VocabWord> lookupTable = new InMemoryLookupTable<>(vocabCache, 10, false, 0.01, Nd4j.getRandom(), 0.0);
+        lookupTable.resetWeights(true);
+
+        assertNotEquals(null, lookupTable.getSyn0());
+        assertNotEquals(null, lookupTable.getSyn1());
+        assertNotEquals(null, lookupTable.getExpTable());
+        assertEquals(null, lookupTable.getSyn1Neg());
+
+        ParagraphVectors vec = new ParagraphVectors.Builder()
+                .lookupTable(lookupTable)
+                .vocabCache(vocabCache)
+                .build();
+
+        File tempFile = File.createTempFile("temp","w2v");
+        tempFile.deleteOnExit();
+
+        WordVectorSerializer.writeParagraphVectors(vec, tempFile);
+
+
+        ParagraphVectors restoredVec = WordVectorSerializer.readParagraphVectors(tempFile);
+
+        for (String word: words) {
+            assertEquals(true, restoredVec.hasWord(word));
+        }
+
+        assertTrue(restoredVec.getVocab().elementAtIndex(1).isLabel());
+    }
+
+    @Test
+    public void testB64_1() throws Exception {
+        String wordA = "night";
+        String wordB = "night day";
+        String encA = WordVectorSerializer.encodeB64(wordA);
+        String encB = WordVectorSerializer.encodeB64(wordB);
+
+        assertEquals(wordA, WordVectorSerializer.decodeB64(encA));
+        assertEquals(wordB, WordVectorSerializer.decodeB64(encB));
+
+        assertEquals(wordA, WordVectorSerializer.decodeB64(wordA));
+        assertEquals(wordB, WordVectorSerializer.decodeB64(wordB));
 
     }
 }

@@ -1,6 +1,7 @@
 package org.deeplearning4j.bagofwords.vectorizer;
 
 import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FileUtils;
 import org.deeplearning4j.models.word2vec.VocabWord;
 import org.deeplearning4j.models.word2vec.wordstore.VocabCache;
@@ -23,13 +24,14 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * @author raver119@gmail.com
  */
+@Slf4j
 public class TfidfVectorizer extends BaseTextVectorizer {
     /**
      * Text coming from an input stream considered as one document
@@ -96,22 +98,35 @@ public class TfidfVectorizer extends BaseTextVectorizer {
         Tokenizer tokenizer = tokenizerFactory.create(text);
         List<String> tokens = tokenizer.getTokens();
 
+        // build document words count
+        Map<String, AtomicLong> counts = new HashMap<>();
+        for (String token: tokens) {
+            if (!counts.containsKey(token))
+                counts.put(token, new AtomicLong(0));
+
+            counts.get(token).incrementAndGet();
+        }
+
         for(int i = 0;i < tokens.size(); i++) {
             int idx = vocabCache.indexOf(tokens.get(i));
             if(idx >= 0) {
-                //System.out.println("TF-IDF for word: " + tokens.get(i));
-                ret.putScalar(idx, tfidfWord(tokens.get(i), tokens.size()));
+                double tf_idf = tfidfWord(tokens.get(i), counts.get(tokens.get(i)).longValue(), tokens.size());
+                //log.info("TF-IDF for word: {} -> {} / {} => {}", tokens.get(i), counts.get(tokens.get(i)).longValue(), tokens.size(), tf_idf);
+                ret.putScalar(idx, tf_idf);
             }
         }
         return ret;
     }
 
-    private double tfidfWord(String word, int documentLength) {
-        return MathUtils.tfidf(tfForWord(word, documentLength),idfForWord(word));
+
+
+    private double tfidfWord(String word, long wordCount, long documentLength) {
+        //log.info("word: {}; TF: {}; IDF: {}", word, tfForWord(wordCount, documentLength), idfForWord(word));
+        return MathUtils.tfidf(tfForWord(wordCount, documentLength),idfForWord(word));
     }
 
-    private double tfForWord(String word, int documentLength) {
-        return MathUtils.tf(vocabCache.wordFrequency(word), documentLength);
+    private double tfForWord(long wordCount, long documentLength) {
+        return (double) wordCount / (double) documentLength;
     }
 
     private double idfForWord(String word) {
@@ -135,7 +150,7 @@ public class TfidfVectorizer extends BaseTextVectorizer {
         protected int minWordFrequency;
         protected VocabCache<VocabWord> vocabCache;
         protected LabelsSource labelsSource = new LabelsSource();
-        protected List<String> stopWords = new ArrayList<>();
+        protected Collection<String> stopWords = new ArrayList<>();
 
         public Builder() {
         }
@@ -171,7 +186,7 @@ public class TfidfVectorizer extends BaseTextVectorizer {
         }
 
         public Builder setStopWords(Collection<String> stopWords) {
-
+        	this.stopWords = stopWords;
             return this;
         }
 
@@ -188,6 +203,7 @@ public class TfidfVectorizer extends BaseTextVectorizer {
             }
 
             vectorizer.vocabCache = this.vocabCache;
+            vectorizer.stopWords = this.stopWords;
 
             return vectorizer;
         }

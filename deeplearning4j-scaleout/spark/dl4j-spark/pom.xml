@@ -18,13 +18,13 @@
 
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>spark</artifactId>
+        <artifactId>spark_2.11</artifactId>
         <groupId>org.deeplearning4j</groupId>
-        <version>0.6.1-SNAPSHOT</version>
+        <version>0.7.3-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>dl4j-spark_2.10</artifactId>
+    <artifactId>dl4j-spark_2.11</artifactId>
     <packaging>jar</packaging>
 
     <name>dl4j-spark</name>
@@ -34,7 +34,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <hadoop.version>1.0.4</hadoop.version>
-        <spark.version>1.5.2</spark.version>
+        <spark.version>1.6.2</spark.version>
     </properties>
 
     <profiles>
@@ -68,11 +68,6 @@
     <dependencies>
 
         <!-- ND4J Shaded Jackson Dependency -->
-        <dependency>
-            <groupId>org.nd4j</groupId>
-            <artifactId>jackson</artifactId>
-            <version>${nd4j.version}</version>
-        </dependency>
 
         <dependency>
             <groupId>org.deeplearning4j</groupId>
@@ -82,19 +77,13 @@
 
         <dependency>
             <groupId>org.apache.spark</groupId>
-            <artifactId>spark-mllib_2.10</artifactId>
+            <artifactId>spark-mllib_2.11</artifactId>
             <version>${spark.version}</version>
         </dependency>
 
         <dependency>
-            <groupId>org.scala-lang</groupId>
-            <artifactId>scala-library</artifactId>
-            <version>2.10.6</version>
-        </dependency>
-
-        <dependency>
             <groupId>org.apache.spark</groupId>
-            <artifactId>spark-core_2.10</artifactId>
+            <artifactId>spark-core_2.11</artifactId>
             <version>${spark.version}</version>
             <exclusions>
                 <exclusion>
@@ -106,8 +95,8 @@
 
         <dependency>
             <groupId>org.datavec</groupId>
-            <artifactId>datavec-spark_2.10</artifactId>
-            <version>${datavec.version}</version>
+            <artifactId>datavec-spark_2.11</artifactId>
+            <version>${datavec.spark.version}</version>
         </dependency>
 
         <dependency>
@@ -117,21 +106,25 @@
         </dependency>
 
         <!-- Test Dependencies -->
-
-
-        <dependency>
-            <groupId>org.nd4j</groupId>
-            <artifactId>nd4j-native</artifactId>
-            <version>${nd4j.version}</version>
-            <scope>test</scope>
-        </dependency>
-
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
-            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>    <!-- Version set by deeplearning4j-parent dependency management -->
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.deeplearning4j</groupId>
+            <artifactId>deeplearning4j-play_2.11</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
 </project>
